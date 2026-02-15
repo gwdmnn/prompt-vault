@@ -1,0 +1,2448 @@
+## User Input
+
+```text
+create an implementation plan based on what you already know, and on what has been defined in the specification.
+```
+
+You **MUST** consider the user input before proceeding (if not empty).
+
+## Outline
+
+1. **Setup**: Run `.specify/scripts/powershell/setup-plan.ps1 -Json` from repo root and parse JSON for FEATURE_SPEC, IMPL_PLAN, SPECS_DIR, BRANCH. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
+
+2. **Load context**: Read FEATURE_SPEC and `.specify/memory/constitution.md`. Load IMPL_PLAN template (already copied).
+
+3. **Execute plan workflow**: Follow the structure in IMPL_PLAN template to:
+   - Fill Technical Context (mark unknowns as "NEEDS CLARIFICATION")
+   - Fill Constitution Check section from constitution
+   - Evaluate gates (ERROR if violations unjustified)
+   - Phase 0: Generate research.md (resolve all NEEDS CLARIFICATION)
+   - Phase 1: Generate data-model.md, contracts/, quickstart.md
+   - Phase 1: Update agent context by running the agent script
+   - Re-evaluate Constitution Check post-design
+
+4. **Stop and report**: Command ends after Phase 2 planning. Report branch, IMPL_PLAN path, and generated artifacts.
+
+## Phases
+
+### Phase 0: Outline & Research
+
+1. **Extract unknowns from Technical Context** above:
+   - For each NEEDS CLARIFICATION → research task
+   - For each dependency → best practices task
+   - For each integration → patterns task
+
+2. **Generate and dispatch research agents**:
+
+   ```text
+   For each unknown in Technical Context:
+     Task: "Research {unknown} for {feature context}"
+   For each technology choice:
+     Task: "Find best practices for {tech} in {domain}"
+   ```
+
+3. **Consolidate findings** in `research.md` using format:
+   - Decision: [what was chosen]
+   - Rationale: [why chosen]
+   - Alternatives considered: [what else evaluated]
+
+**Output**: research.md with all NEEDS CLARIFICATION resolved
+
+### Phase 1: Design & Contracts
+
+**Prerequisites:** `research.md` complete
+
+1. **Extract entities from feature spec** → `data-model.md`:
+   - Entity name, fields, relationships
+   - Validation rules from requirements
+   - State transitions if applicable
+
+2. **Generate API contracts** from functional requirements:
+   - For each user action → endpoint
+   - Use standard REST/GraphQL patterns
+   - Output OpenAPI/GraphQL schema to `/contracts/`
+
+3. **Agent context update**:
+   - Run `.specify/scripts/powershell/update-agent-context.ps1 -AgentType claude`
+   - These scripts detect which AI agent is in use
+   - Update the appropriate agent-specific context file
+   - Add only new technology from current plan
+   - Preserve manual additions between markers
+
+**Output**: data-model.md, /contracts/*, quickstart.md, agent-specific file
+
+## Key rules
+
+- Use absolute paths
+- ERROR on gate failures or unresolved clarifications
+
+---
+
+<task-notification>
+<task-id>a4dbc17</task-id>
+<status>completed</status>
+<summary>Agent "Research SQLModel versioning pattern" completed</summary>
+<result>Now I have a thorough understanding of the project context. Here are my concrete recommendations.
+
+---
+
+## Recommendations for Entity Versioning with SQLModel + PostgreSQL
+
+### 1. Recommended Relationship Pattern: One-to-Many with "Current Version" Back-Reference
+
+The best pattern for SQLModel is a **self-referential foreign key on `Prompt`** pointing to the current `PromptVersion`, combined with a standard one-to-many relationship for all versions. This is the "current pointer" pattern.
+
+**Why this pattern over alternatives:**
+- A `current_version_id` FK on `Prompt` gives O(1) access to the latest version without a subquery.
+- The one-to-many `versions` relationship provides the full history.
+- SQLAlchemy (which SQLModel wraps) handles this cleanly with `post_update=True` to break the circular dependency during inserts.
+
+**Concrete model structure for `/mnt/c/projects/prompt-vault/backend/app/models/prompt.py`:**
+
+```python
+import uuid
+from datetime import datetime
+from typing import Optional
+
+from sqlmodel import SQLModel, Field, Relationship, Column
+from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+
+
+class Prompt(SQLModel, table=True):
+    __tablename__ = "prompts"
+
+    id: uuid.UUID = Field(
+        default_factory=uuid.uuid4,
+        sa_column=Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+    )
+    title: str = Field(max_length=200, index=True)
+    description: str = Field(default="", max_length=2000)
+    category: str = Field(index=True)  # Use PromptCategory enum via sa_column if preferred
+    is_active: bool = Field(default=True, index=True)
+
+    # Optimistic concurrency control
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"server_default": text("now()")},
+    )
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"server_default": text("now()")},
+    )
+
+    # Current version pointer (nullable for initial insert, then updated)
+    current_version_id: Optional[uuid.UUID] = Field(
+        default=None,
+        foreign_key="prompt_versions.id",
+    )
+
+    # Relationships
+    # use_list=False because this points to ONE specific version
+    current_version: Optional["PromptVersion"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[Prompt.current_version_id]",
+            "post_update": True,  # Critical: breaks circular INSERT dependency
+            "lazy": "joined",
+        },
+    )
+
+    # All versions (one-to-many via PromptVersion.prompt_id)
+    versions: list["PromptVersion"] = Relationship(
+        back_populates="prompt",
+        sa_relationship_kwargs={
+            "foreign_keys": "[PromptVersion.prompt_id]",
+            "order_by": "PromptVersion.version_number.desc()",
+            "lazy": "selectin",
+        },
+    )
+
+
+class PromptVersion(SQLModel, table=True):
+    __tablename__ = "prompt_versions"
+
+    id: uuid.UUID = Field(
+        default_factory=uuid.uuid4,
+        sa_column=Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+    )
+    prompt_id: uuid.UUID = Field(foreign_key="prompts.id", index=True)
+    version_number: int = Field(ge=1)
+    content: str = Field(max_length=50000)
+    change_summary: str = Field(default="", max_length=500)
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"server_default": text("now()")},
+    )
+
+    # Back-reference to parent prompt
+    prompt: Optional[Prompt] = Relationship(
+        back_populates="versions",
+        sa_relationship_kwargs={
+            "foreign_keys": "[PromptVersion.prompt_id]",
+        },
+    )
+```
+
+**Key design decisions explained:**
+
+- `post_update=True` on the `current_version` relationship tells SQLAlchemy to INSERT the `Prompt` first with `current_version_id=NULL`, then INSERT the `PromptVersion`, then UPDATE `Prompt.current_version_id`. This solves the chicken-and-egg problem of two tables referencing each other.
+- Two separate foreign key paths exist between `Prompt` and `PromptVersion`: (a) `PromptVersion.prompt_id -> Prompt.id` for the one-to-many, and (b) `Prompt.current_version_id -> PromptVersion.id` for the current pointer. The `foreign_keys` argument in `sa_relationship_kwargs` disambiguates which FK each relationship uses.
+- `lazy="joined"` on `current_version` means fetching a prompt always includes its current version content in a single query (JOIN). For the `versions` list, `lazy="selectin"` issues a second SELECT only when accessed, which is more efficient when you don't always need the full history.
+
+---
+
+### 2. Auto-Incrementing Version Numbers Per Prompt
+
+**Recommendation: Application-level logic, not a database sequence.**
+
+Global sequences don't work here because you need per-prompt numbering (version 1, 2, 3... for each prompt independently). The correct approach uses a `SELECT MAX() + 1` inside the same transaction that inserts the new version, combined with a unique constraint to prevent race conditions.
+
+**Implementation in the service layer (`prompt_service.py`):**
+
+```python
+from sqlalchemy import select, func
+from sqlmodel import Session
+
+
+async def create_version(
+    session: Session,
+    prompt_id: uuid.UUID,
+    content: str,
+    change_summary: str,
+) -> PromptVersion:
+    # Calculate next version number within the transaction
+    stmt = select(func.coalesce(func.max(PromptVersion.version_number), 0) + 1).where(
+        PromptVersion.prompt_id == prompt_id
+    )
+    next_version = session.exec(stmt).one()
+
+    version = PromptVersion(
+        prompt_id=prompt_id,
+        version_number=next_version,
+        content=content,
+        change_summary=change_summary,
+    )
+    session.add(version)
+
+    # Update the prompt's current version pointer
+    prompt = session.get(Prompt, prompt_id)
+    prompt.current_version = version
+    prompt.updated_at = datetime.utcnow()
+
+    session.flush()  # Flush to detect unique constraint violations early
+    return version
+```
+
+**Database-level safety net -- add a unique constraint:**
+
+```python
+class PromptVersion(SQLModel, table=True):
+    __tablename__ = "prompt_versions"
+    __table_args__ = (
+        UniqueConstraint("prompt_id", "version_number", name="uq_prompt_version_number"),
+    )
+    # ... fields as above
+```
+
+This unique constraint is critical. If two concurrent transactions both compute `MAX() + 1 = 4`, the second one to commit will fail with an `IntegrityError`, which your service layer can catch and retry. This is far more reliable than trying to use advisory locks or serializable isolation for this specific case.
+
+**Why not a database trigger for version numbering?** Triggers hide logic from the application layer, making debugging and testing harder. With SQLModel's ORM approach, keeping this in Python means your unit tests can verify version numbering without needing a real PostgreSQL instance with triggers installed.
+
+---
+
+### 3. Optimistic Concurrency Control
+
+**Recommendation: Use SQLAlchemy's built-in `version_id_col` feature.**
+
+SQLAlchemy has native support for optimistic concurrency via a version counter column. This is superior to timestamp-based comparison because timestamps can have precision issues and clock skew problems.
+
+**However, for your spec's stated approach (timestamp-based), here is how to implement both options:**
+
+**Option A (Recommended): Integer version counter via `__mapper_args__`**
+
+```python
+from sqlalchemy.orm import declared_attr
+
+class Prompt(SQLModel, table=True):
+    __tablename__ = "prompts"
+
+    # ... other fields ...
+
+    # Concurrency control column (not the same as prompt content version!)
+    lock_version: int = Field(default=1)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    __mapper_args__ = {
+        "version_id_col": "lock_version",  # SQLAlchemy handles this automatically
+    }
+```
+
+With `version_id_col`, every UPDATE that SQLAlchemy generates automatically includes `WHERE lock_version = <expected_value>` and increments it. If the row was modified by another transaction, the WHERE clause matches zero rows and SQLAlchemy raises `StaleDataError`. This requires zero manual code.
+
+**Option B: Timestamp-based (as mentioned in your spec)**
+
+If you prefer timestamps (simpler schema, one fewer column), implement it manually at the service layer:
+
+```python
+from fastapi import HTTPException
+from sqlmodel import Session
+
+
+async def update_prompt(
+    session: Session,
+    prompt_id: uuid.UUID,
+    update_data: PromptUpdate,
+    expected_updated_at: datetime,  # Client sends this from the last-read state
+) -> Prompt:
+    prompt = session.get(Prompt, prompt_id)
+    if prompt is None:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+
+    # Optimistic concurrency check
+    if prompt.updated_at != expected_updated_at:
+        raise HTTPException(
+            status_code=409,
+            detail="Prompt was modified by another request. Please reload and try again.",
+        )
+
+    # Apply updates
+    for key, value in update_data.model_dump(exclude_unset=True).items():
+        setattr(prompt, key, value)
+    prompt.updated_at = datetime.utcnow()
+
+    # Create new version if content changed
+    if update_data.content is not None:
+        await create_version(
+            session=session,
+            prompt_id=prompt.id,
+            content=update_data.content,
+            change_summary=update_data.change_summary or "",
+        )
+
+    session.add(prompt)
+    session.commit()
+    session.refresh(prompt)
+    return prompt
+```
+
+**My strong recommendation is Option A** (`version_id_col` with an integer `lock_version`). Reasons:
+- Completely automatic -- SQLAlchemy generates the correct SQL.
+- No datetime precision issues (PostgreSQL `timestamp` has microsecond precision, but Python's `datetime.utcnow()` may not match exactly after round-tripping through JSON serialization).
+- The `StaleDataError` exception is well-documented and testable.
+- You can still have `updated_at` for display purposes; it just isn't used for concurrency control.
+
+**API contract for the client:**
+
+```python
+class PromptUpdate(SQLModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    content: Optional[str] = None
+    change_summary: Optional[str] = None
+    lock_version: int  # Required: client must echo back the lock_version it last read
+```
+
+The client reads a prompt (gets `lock_version: 3`), makes edits, sends `PUT /prompts/{id}` with `lock_version: 3`. If someone else edited in between (bumping to `lock_version: 4`), the update fails with 409 Conflict.
+
+---
+
+### 4. Trigger vs. Application-Level Logic for Version Creation
+
+**Recommendation: Application-level logic. Not triggers.**
+
+Here is the analysis:
+
+| Factor | Database Trigger | Application Logic |
+|--------|-----------------|-------------------|
+| Testability | Requires live PostgreSQL for tests | Can unit-test with mocks or SQLite |
+| Debuggability | Hidden side effects, no stack trace | Explicit flow, full traceability |
+| Migration portability | Trigger DDL varies across databases | Pure Python, database-agnostic |
+| Change summary | Trigger cannot know the user's intent | Service layer has the full request context |
+| SQLModel compatibility | Triggers bypass ORM; cached objects become stale | ORM manages object graph coherently |
+| Performance | Marginally faster (no round-trip) | Negligible difference for this use case |
+
+The decisive factor for your use case: **the `change_summary` field**. A database trigger can detect that a row changed, but it cannot know *why* it changed or what summary the user wants to attach. This information is only available in the application request context.
+
+**Implementation pattern (in `prompt_service.py`):**
+
+```python
+class PromptService:
+    def __init__(self, session: Session):
+        self.session = session
+
+    async def update_prompt(
+        self,
+        prompt_id: uuid.UUID,
+        data: PromptUpdate,
+    ) -> Prompt:
+        prompt = self.session.get(Prompt, prompt_id)
+        if not prompt:
+            raise PromptNotFoundError(prompt_id)
+        if not prompt.is_active:
+            raise PromptDeletedError(prompt_id)
+
+        # Detect if content actually changed
+        content_changed = (
+            data.content is not None
+            and prompt.current_version
+            and data.content != prompt.current_version.content
+        )
+
+        # Update metadata fields
+        if data.title is not None:
+            prompt.title = data.title
+        if data.description is not None:
+            prompt.description = data.description
+        if data.category is not None:
+            prompt.category = data.category
+
+        # Create new version only if content changed
+        if content_changed:
+            next_num = self._next_version_number(prompt_id)
+            version = PromptVersion(
+                prompt_id=prompt_id,
+                version_number=next_num,
+                content=data.content,
+                change_summary=data.change_summary or "",
+            )
+            self.session.add(version)
+            self.session.flush()  # Get the version ID
+            prompt.current_version_id = version.id
+
+        prompt.updated_at = datetime.utcnow()
+        self.session.add(prompt)
+        self.session.commit()
+        self.session.refresh(prompt)
+        return prompt
+
+    def _next_version_number(self, prompt_id: uuid.UUID) -> int:
+        stmt = select(
+            func.coalesce(func.max(PromptVersion.version_number), 0) + 1
+        ).where(PromptVersion.prompt_id == prompt_id)
+        return self.session.exec(stmt).one()
+```
+
+---
+
+### 5. Best Practices for SQLModel + Alembic Migration Setup
+
+**5a. Alembic configuration with SQLModel**
+
+The key issue: Alembic's autogenerate needs to discover your SQLModel models. SQLModel models register with SQLAlchemy's metadata through `SQLModel.metadata`, which you must import in `alembic/env.py`.
+
+**`alembic/env.py` -- critical setup:**
+
+```python
+from logging.config import fileConfig
+from sqlalchemy import engine_from_config, pool
+from alembic import context
+
+# THIS IMPORT IS CRITICAL: it ensures all SQLModel table models
+# are registered in metadata before autogenerate runs
+from app.models.prompt import Prompt, PromptVersion  # noqa: F401
+from app.models.evaluation import Evaluation, EvaluationCriterion  # noqa: F401
+
+from sqlmodel import SQLModel
+
+config = context.config
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+# Use SQLModel's metadata, NOT Base.metadata
+target_metadata = SQLModel.metadata
+
+
+def run_migrations_offline() -> None:
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+        # Render enum types for PostgreSQL
+        render_as_batch=False,
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            # Compare types to detect column type changes
+            compare_type=True,
+            # Compare server defaults
+            compare_server_default=True,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+```
+
+**5b. Common SQLModel + Alembic pitfalls and solutions:**
+
+1. **Duplicate table creation**: SQLModel models that don't have `table=True` (schema-only models) should NOT be in the same file as table models if they share field names. Alembic sees them in `SQLModel.metadata` and gets confused. Keep your Pydantic-only schemas in `app/schemas/` (which your project structure already does -- good).
+
+2. **UUID columns**: Alembic autogenerate sometimes renders UUID columns as `sa.VARCHAR()` instead of `postgresql.UUID()`. Add a `render_item` hook in `env.py`:
+
+    ```python
+    def render_item(type_, obj, autogen_context):
+        if type_ == "type" and isinstance(obj, PG_UUID):
+            autogen_context.imports.add(
+                "from sqlalchemy.dialects.postgresql import UUID"
+            )
+            return "UUID(as_uuid=True)"
+        return False
+    ```
+
+3. **Migration naming convention**: Use a timestamp prefix for ordering:
+
+    ```ini
+    # alembic.ini
+    [alembic]
+    file_template = %%(year)d_%%(month).2d_%%(day).2d_%%(hour).2d%%(minute).2d-%%(slug)s
+    ```
+
+4. **Initial migration command**:
+
+    ```bash
+    cd backend
+    alembic init alembic
+    # Edit alembic.ini and env.py as shown above
+    alembic revision --autogenerate -m "create prompts and prompt_versions tables"
+    alembic upgrade head
+    ```
+
+**5c. Database session management for FastAPI:**
+
+```python
+# app/core/database.py
+from collections.abc import Generator
+from sqlmodel import Session, create_engine
+from app.core.config import settings
+
+engine = create_engine(
+    settings.database_url,
+    echo=settings.debug,
+    pool_pre_ping=True,  # Verify connections before using them
+    pool_size=5,
+    max_overflow=10,
+)
+
+
+def get_session() -> Generator[Session, None, None]:
+    with Session(engine) as session:
+        yield session
+```
+
+```python
+# app/api/deps.py
+from typing import Annotated
+from fastapi import Depends
+from sqlmodel import Session
+from app.core.database import get_session
+
+SessionDep = Annotated[Session, Depends(get_session)]
+```
+
+**5d. Expected initial migration SQL (for reference):**
+
+The autogenerated migration should produce something equivalent to:
+
+```sql
+CREATE TABLE prompts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title VARCHAR(200) NOT NULL,
+    description VARCHAR(2000) NOT NULL DEFAULT '',
+    category VARCHAR NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    lock_version INTEGER NOT NULL DEFAULT 1,
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    current_version_id UUID,
+    CONSTRAINT fk_prompt_current_version
+        FOREIGN KEY (current_version_id) REFERENCES prompt_versions(id)
+        DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE prompt_versions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    prompt_id UUID NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+    version_number INTEGER NOT NULL,
+    content VARCHAR(50000) NOT NULL,
+    change_summary VARCHAR(500) NOT NULL DEFAULT '',
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    CONSTRAINT uq_prompt_version_number UNIQUE (prompt_id, version_number)
+);
+
+CREATE INDEX ix_prompts_title ON prompts(title);
+CREATE INDEX ix_prompts_category ON prompts(category);
+CREATE INDEX ix_prompts_is_active ON prompts(is_active);
+CREATE INDEX ix_prompt_versions_prompt_id ON prompt_versions(prompt_id);
+```
+
+Note: The FK from `prompts.current_version_id` to `prompt_versions.id` creates a circular reference. Alembic may need you to manually add `DEFERRABLE INITIALLY DEFERRED` to this constraint, or to create the tables in two steps (create `prompts` without the FK, create `prompt_versions`, then `ALTER TABLE prompts ADD CONSTRAINT ...`). SQLAlchemy's `post_update=True` handles this at the ORM level, but the migration may need manual adjustment.
+
+---
+
+### Summary of Recommendations
+
+| Concern | Recommendation |
+|---------|---------------|
+| **Relationship pattern** | Two FK paths: `PromptVersion.prompt_id -> Prompt.id` (one-to-many) and `Prompt.current_version_id -> PromptVersion.id` (current pointer) with `post_update=True` |
+| **Version numbering** | Application-level `SELECT MAX() + 1` with `UNIQUE(prompt_id, version_number)` constraint as safety net |
+| **Optimistic concurrency** | `lock_version` integer column with SQLAlchemy `version_id_col` mapper arg; client echoes `lock_version` on every update |
+| **Version creation** | Application-level in service layer (not triggers) -- required for `change_summary` and testability |
+| **Soft delete** | `is_active` boolean flag with index; filter in repository layer queries |
+| **Alembic setup** | Import all table models in `env.py`, use `SQLModel.metadata` as `target_metadata`, enable `compare_type=True` |
+| **Session management** | FastAPI `Depends` with `yield`-based session generator |</result>
+<usage>total_tokens: 26463
+tool_uses: 12
+duration_ms: 114803</usage>
+</task-notification>
+Full transcript available at: /tmp/claude-1000/-mnt-c-projects-prompt-vault/tasks/a4dbc17.output
+
+---
+
+<task-notification>
+<task-id>a766a5f</task-id>
+<status>completed</status>
+<summary>Agent "Research LangGraph evaluation agent" completed</summary>
+<result>Now I have full context of your project. Here is my comprehensive research report.
+
+---
+
+## LangGraph Evaluation Agent: Architecture Recommendations for PromptVault
+
+Based on your ADR-001 (LangGraph 0.2+, FastAPI, Python 3.12+), spec (6 criteria, structured reports), and plan (files at `backend/app/agents/`), here are concrete recommendations for each of your questions.
+
+---
+
+### 1. Best Pattern: StateGraph for Multi-Criteria Evaluation
+
+The recommended pattern is a **fan-out/fan-in graph** with a preparation node, parallel criterion evaluation nodes, and an aggregation node. LangGraph 0.2+ supports this via conditional edges with multiple targets or via the `Send` API.
+
+The graph topology looks like this:
+
+```
+START -> prepare_evaluation
+              |
+     +--------+--------+--------+--------+--------+
+     v        v        v        v        v        v
+  clarity  specific  struct  context  format  constraint
+     |        |        |        |        |        |
+     +--------+--------+--------+--------+--------+
+              |
+         aggregate_results
+              |
+            END
+```
+
+Here is the concrete code pattern for `/mnt/c/projects/prompt-vault/backend/app/agents/evaluator.py`:
+
+```python
+from langgraph.graph import StateGraph, START, END
+from langgraph.types import Send
+from typing import TypedDict, Annotated
+import operator
+
+
+# --- State Definitions ---
+
+class CriterionResult(TypedDict):
+    criterion_name: str
+    score: int  # 0-100
+    feedback: str
+    improvement_suggestions: list[str]
+
+
+class EvaluationState(TypedDict):
+    # Input
+    prompt_content: str
+    prompt_title: str
+    prompt_category: str
+
+    # Intermediate - uses operator.add reducer to merge parallel results
+    criterion_results: Annotated[list[CriterionResult], operator.add]
+
+    # Output (set by aggregate node)
+    overall_score: float
+    evaluation_summary: str
+    status: str  # "pending" | "completed" | "failed"
+    error_message: str
+
+
+# --- Node Functions ---
+
+async def prepare_evaluation(state: EvaluationState) -> dict:
+    """Validates input and prepares context. Returns empty dict (no state change)."""
+    if not state["prompt_content"].strip():
+        return {"status": "failed", "error_message": "Empty prompt content"}
+    return {"status": "pending"}
+
+
+def route_to_criteria(state: EvaluationState) -> list[Send]:
+    """Fan-out: dispatches one Send per criterion to the evaluate_criterion node."""
+    if state.get("status") == "failed":
+        return [Send("aggregate_results", state)]
+
+    criteria = [
+        "clarity", "specificity", "structure",
+        "context_setting", "output_format_guidance", "constraint_definition",
+    ]
+    return [
+        Send("evaluate_criterion", {
+            **state,
+            "_current_criterion": criterion,
+        })
+        for criterion in criteria
+    ]
+
+
+async def evaluate_criterion(state: dict) -> dict:
+    """Evaluates a single criterion. Called once per criterion via Send."""
+    criterion = state["_current_criterion"]
+    prompt_content = state["prompt_content"]
+
+    # LLM call happens here (see section 4 for provider abstraction)
+    result = await _llm_evaluate_criterion(criterion, prompt_content)
+
+    return {
+        "criterion_results": [result],  # list of one; reducer merges via operator.add
+    }
+
+
+async def aggregate_results(state: EvaluationState) -> dict:
+    """Fan-in: computes overall score and summary from all criterion results."""
+    results = state["criterion_results"]
+
+    if not results:
+        return {
+            "overall_score": 0.0,
+            "evaluation_summary": "Evaluation failed: no criteria results.",
+            "status": "failed",
+        }
+
+    overall = sum(r["score"] for r in results) / len(results)
+    low_criteria = [r for r in results if r["score"] < 80]
+    summary_parts = [
+        f"Overall score: {overall:.1f}/100.",
+        f"{len(low_criteria)} criteria scored below 80 and have improvement suggestions.",
+    ]
+
+    return {
+        "overall_score": overall,
+        "evaluation_summary": " ".join(summary_parts),
+        "status": "completed",
+    }
+
+
+# --- Graph Construction ---
+
+def build_evaluation_graph() -> StateGraph:
+    graph = StateGraph(EvaluationState)
+
+    graph.add_node("prepare_evaluation", prepare_evaluation)
+    graph.add_node("evaluate_criterion", evaluate_criterion)
+    graph.add_node("aggregate_results", aggregate_results)
+
+    graph.add_edge(START, "prepare_evaluation")
+    graph.add_conditional_edges("prepare_evaluation", route_to_criteria)
+    graph.add_edge("evaluate_criterion", "aggregate_results")
+    graph.add_edge("aggregate_results", END)
+
+    return graph.compile()
+
+
+# Singleton compiled graph
+evaluation_agent = build_evaluation_graph()
+```
+
+---
+
+### 2. Parallel Nodes (Fan-Out/Fan-In) vs. Sequential Chain
+
+**Recommendation: Use the `Send` API for parallel fan-out.** Here is the comparison:
+
+| Factor | Parallel (Send API) | Sequential Chain |
+|--------|-------------------|------------------|
+| **Latency** | ~1 LLM call duration (all 6 run concurrently) | ~6x LLM call duration |
+| **Complexity** | Moderate -- requires `Send` + reducer | Simple -- linear chain |
+| **State Isolation** | Each criterion node gets its own copy | Shared state, risk of bleeding |
+| **Error Handling** | One failure does not block others | One failure stops the chain |
+| **Matches spec SC-004** | Yes -- 60s budget easily met | Risk -- 6 serial LLM calls may exceed 60s |
+
+**Why `Send` over static conditional edges:** Your criteria are a fixed set, but `Send` gives you two advantages: (a) each criterion node receives its own context (the `_current_criterion` name) without polluting the shared state, and (b) you can dynamically add criteria post-MVP without changing the graph topology.
+
+**Alternative considered (static parallel edges):**
+```python
+# This also works but requires 6 separate node functions:
+graph.add_conditional_edges("prepare_evaluation", lambda s: [
+    "eval_clarity", "eval_specificity", "eval_structure",
+    "eval_context", "eval_format", "eval_constraints"
+])
+```
+This approach requires duplicating the node function six times or using a factory. The `Send` API is cleaner for parameterized parallelism.
+
+---
+
+### 3. State Schema (TypedDict) for the Evaluation Flow
+
+Here is the complete state schema for `/mnt/c/projects/prompt-vault/backend/app/agents/evaluator.py`, designed to integrate with the Pydantic schemas at `backend/app/schemas/evaluation.py`:
+
+```python
+from typing import TypedDict, Annotated, Literal
+import operator
+
+
+class CriterionResult(TypedDict):
+    """Result of evaluating a single criterion."""
+    criterion_name: str
+    score: int                          # 0-100
+    feedback: str                       # Detailed feedback text
+    improvement_suggestions: list[str]  # Actionable suggestions
+
+
+class EvaluationState(TypedDict):
+    """Full state flowing through the evaluation graph.
+
+    Fields marked with Annotated[..., operator.add] are *reducers*:
+    when parallel nodes return lists, LangGraph concatenates them
+    rather than overwriting.
+    """
+
+    # --- Input (set before invocation) ---
+    prompt_content: str
+    prompt_title: str
+    prompt_category: str  # "orchestrator" | "task_execution"
+    prompt_version_id: str  # UUID linking result to PromptVersion
+
+    # --- Intermediate (accumulated by parallel nodes) ---
+    criterion_results: Annotated[list[CriterionResult], operator.add]
+
+    # --- Internal (used by Send routing, not persisted) ---
+    _current_criterion: str  # Only present in Send-dispatched copies
+
+    # --- Output (set by aggregate node) ---
+    overall_score: float
+    evaluation_summary: str
+    status: Literal["pending", "evaluating", "completed", "failed"]
+    error_message: str
+```
+
+**Key design decisions:**
+
+- **`Annotated[list[CriterionResult], operator.add]`** -- This is the LangGraph 0.2+ reducer pattern. When six parallel `evaluate_criterion` nodes each return `{"criterion_results": [one_result]}`, the reducer concatenates them into a single list of six results. Without the reducer, the last node to complete would overwrite the others.
+
+- **`_current_criterion`** -- This field is only present in the state copy dispatched via `Send`. It acts as a parameter telling the generic `evaluate_criterion` node which criterion to evaluate. By convention, prefixing with `_` signals it is not part of the persisted output.
+
+- **Alignment with your Pydantic schemas** -- The `CriterionResult` TypedDict maps directly to the `EvaluationCriterion` entity in your spec (`criterion name, score, feedback text, improvement suggestion`). The conversion from TypedDict to Pydantic model happens in the service layer (`evaluation_service.py`), not in the agent.
+
+---
+
+### 4. Multi-Provider LLM Integration (Anthropic, OpenAI)
+
+Your plan already specifies a Strategy pattern via `backend/app/agents/provider.py`. Here is the concrete implementation using Python `Protocol` for the abstraction and `langchain-core` chat model interfaces:
+
+```python
+# backend/app/agents/provider.py
+
+from typing import Protocol, runtime_checkable
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import HumanMessage, SystemMessage
+
+
+@runtime_checkable
+class LLMProvider(Protocol):
+    """Protocol for LLM provider abstraction."""
+
+    def get_chat_model(self) -> BaseChatModel:
+        """Return a configured chat model instance."""
+        ...
+
+
+class AnthropicProvider:
+    """Anthropic Claude provider."""
+
+    def __init__(self, model: str = "claude-sonnet-4-20250514", temperature: float = 0.0):
+        self._model = model
+        self._temperature = temperature
+
+    def get_chat_model(self) -> BaseChatModel:
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(
+            model=self._model,
+            temperature=self._temperature,
+            max_tokens=4096,
+        )
+
+
+class OpenAIProvider:
+    """OpenAI GPT provider."""
+
+    def __init__(self, model: str = "gpt-4o", temperature: float = 0.0):
+        self._model = model
+        self._temperature = temperature
+
+    def get_chat_model(self) -> BaseChatModel:
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=self._model,
+            temperature=self._temperature,
+            max_tokens=4096,
+        )
+
+
+def create_provider(provider_name: str = "anthropic", **kwargs) -> LLMProvider:
+    """Factory function. Provider name comes from config/env."""
+    providers = {
+        "anthropic": AnthropicProvider,
+        "openai": OpenAIProvider,
+    }
+    if provider_name not in providers:
+        raise ValueError(f"Unknown provider: {provider_name}. Available: {list(providers)}")
+    return providers[provider_name](**kwargs)
+```
+
+Then in the evaluator, the LLM call function uses this abstraction:
+
+```python
+# backend/app/agents/evaluator.py (continued)
+
+from app.agents.provider import LLMProvider, create_provider
+from app.agents.criteria import CRITERION_PROMPTS
+from app.core.config import settings
+from langchain_core.messages import SystemMessage, HumanMessage
+import json
+
+
+async def _llm_evaluate_criterion(
+    criterion: str,
+    prompt_content: str,
+    provider: LLMProvider | None = None,
+) -> CriterionResult:
+    """Call the LLM to evaluate a single criterion."""
+    if provider is None:
+        provider = create_provider(settings.llm_provider)
+
+    model = provider.get_chat_model()
+    system_prompt = CRITERION_PROMPTS[criterion]
+
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=f"Evaluate this prompt:\n\n{prompt_content}"),
+    ]
+
+    # Use structured output via with_structured_output (LangChain 0.2+)
+    structured_model = model.with_structured_output(CriterionOutput)
+    result = await structured_model.ainvoke(messages)
+
+    return CriterionResult(
+        criterion_name=criterion,
+        score=result.score,
+        feedback=result.feedback,
+        improvement_suggestions=result.improvement_suggestions,
+    )
+```
+
+For the structured output, define a Pydantic model that both Anthropic and OpenAI can bind to:
+
+```python
+# backend/app/agents/criteria.py
+
+from pydantic import BaseModel, Field
+
+
+class CriterionOutput(BaseModel):
+    """Structured output schema for LLM criterion evaluation."""
+    score: int = Field(ge=0, le=100, description="Score from 0-100")
+    feedback: str = Field(description="Detailed feedback explaining the score")
+    improvement_suggestions: list[str] = Field(
+        description="Specific, actionable suggestions for improvement"
+    )
+
+
+CRITERION_PROMPTS: dict[str, str] = {
+    "clarity": (
+        "You are a prompt quality evaluator. Evaluate the CLARITY of the given prompt. "
+        "Clarity measures how easily a reader can understand the prompt's intent, instructions, "
+        "and expected behavior. Consider: Is the language unambiguous? Are instructions direct? "
+        "Is the purpose immediately apparent? Score 0-100."
+    ),
+    "specificity": (
+        "You are a prompt quality evaluator. Evaluate the SPECIFICITY of the given prompt. "
+        "Specificity measures how precisely the prompt defines what it wants. Consider: "
+        "Are vague terms avoided? Are concrete examples provided? Are edge cases addressed? "
+        "Score 0-100."
+    ),
+    "structure": (
+        "You are a prompt quality evaluator. Evaluate the STRUCTURE of the given prompt. "
+        "Structure measures how well-organized the prompt is. Consider: Is there a logical "
+        "flow? Are sections clearly delineated? Is information grouped coherently? "
+        "Score 0-100."
+    ),
+    "context_setting": (
+        "You are a prompt quality evaluator. Evaluate the CONTEXT-SETTING of the given prompt. "
+        "Context-setting measures how well the prompt establishes the scenario, role, and "
+        "background information. Consider: Is the AI's role defined? Is domain context "
+        "provided? Are assumptions stated? Score 0-100."
+    ),
+    "output_format_guidance": (
+        "You are a prompt quality evaluator. Evaluate the OUTPUT FORMAT GUIDANCE of the given "
+        "prompt. This measures how clearly the prompt specifies the expected response format. "
+        "Consider: Is the desired format explicit (JSON, markdown, bullet points)? Are "
+        "length expectations set? Are examples of desired output provided? Score 0-100."
+    ),
+    "constraint_definition": (
+        "You are a prompt quality evaluator. Evaluate the CONSTRAINT DEFINITION of the given "
+        "prompt. This measures how well the prompt defines boundaries and limitations. "
+        "Consider: Are 'do not' rules specified? Are scope boundaries clear? Are safety "
+        "guardrails included where appropriate? Score 0-100."
+    ),
+}
+```
+
+**Why `BaseChatModel` and not direct API calls:** LangChain's `BaseChatModel` is the common interface that both `ChatAnthropic` and `ChatOpenAI` implement. The `with_structured_output()` method works on both providers -- it uses tool-calling under the hood for both Anthropic and OpenAI, guaranteeing the response conforms to your Pydantic schema. This eliminates JSON parsing errors.
+
+---
+
+### 5. Best Practices for Mocking LLM Calls in Tests
+
+Here is the testing strategy for `/mnt/c/projects/prompt-vault/backend/tests/agents/test_evaluator.py`:
+
+**Approach A: Mock at the Provider level (recommended for unit tests)**
+
+```python
+# backend/tests/agents/test_evaluator.py
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from app.agents.evaluator import (
+    build_evaluation_graph,
+    evaluate_criterion,
+    EvaluationState,
+    CriterionResult,
+)
+from app.agents.criteria import CriterionOutput
+
+
+@pytest.fixture
+def mock_provider():
+    """Create a mock LLM provider that returns deterministic results."""
+    provider = MagicMock()
+    mock_model = MagicMock()
+
+    # Mock with_structured_output to return a model that produces fixed output
+    structured_model = AsyncMock()
+    structured_model.ainvoke.return_value = CriterionOutput(
+        score=85,
+        feedback="The prompt demonstrates good clarity with direct instructions.",
+        improvement_suggestions=["Consider adding an explicit example of desired output."],
+    )
+    mock_model.with_structured_output.return_value = structured_model
+    provider.get_chat_model.return_value = mock_model
+    return provider
+
+
+@pytest.fixture
+def sample_state() -> EvaluationState:
+    return EvaluationState(
+        prompt_content="You are a helpful assistant. Summarize the following text in 3 bullet points.",
+        prompt_title="Text Summarizer",
+        prompt_category="task_execution",
+        prompt_version_id="test-uuid-123",
+        criterion_results=[],
+        _current_criterion="",
+        overall_score=0.0,
+        evaluation_summary="",
+        status="pending",
+        error_message="",
+    )
+
+
+class TestEvaluateCriterion:
+    """Unit tests for individual criterion evaluation."""
+
+    @pytest.mark.asyncio
+    async def test_returns_criterion_result(self, mock_provider, sample_state):
+        """Single criterion evaluation returns correctly shaped result."""
+        from app.agents.evaluator import _llm_evaluate_criterion
+
+        result = await _llm_evaluate_criterion(
+            criterion="clarity",
+            prompt_content=sample_state["prompt_content"],
+            provider=mock_provider,
+        )
+
+        assert result["criterion_name"] == "clarity"
+        assert 0 <= result["score"] <= 100
+        assert len(result["feedback"]) > 0
+        assert isinstance(result["improvement_suggestions"], list)
+
+
+class TestEvaluationGraph:
+    """Integration tests for the full evaluation graph with mocked LLM."""
+
+    @pytest.mark.asyncio
+    async def test_full_graph_produces_all_criteria(self, mock_provider, sample_state):
+        """Graph evaluates all 6 criteria and aggregates results."""
+        with patch("app.agents.evaluator.create_provider", return_value=mock_provider):
+            graph = build_evaluation_graph()
+            result = await graph.ainvoke(sample_state)
+
+        assert result["status"] == "completed"
+        assert len(result["criterion_results"]) == 6
+        assert result["overall_score"] == 85.0  # all mocked to 85
+
+        criterion_names = {r["criterion_name"] for r in result["criterion_results"]}
+        expected = {
+            "clarity", "specificity", "structure",
+            "context_setting", "output_format_guidance", "constraint_definition",
+        }
+        assert criterion_names == expected
+
+    @pytest.mark.asyncio
+    async def test_empty_prompt_fails_gracefully(self, mock_provider):
+        """Empty prompt content results in failed status."""
+        state = EvaluationState(
+            prompt_content="   ",
+            prompt_title="Empty",
+            prompt_category="orchestrator",
+            prompt_version_id="test-uuid-456",
+            criterion_results=[],
+            _current_criterion="",
+            overall_score=0.0,
+            evaluation_summary="",
+            status="pending",
+            error_message="",
+        )
+
+        with patch("app.agents.evaluator.create_provider", return_value=mock_provider):
+            graph = build_evaluation_graph()
+            result = await graph.ainvoke(state)
+
+        assert result["status"] == "failed"
+        assert "empty" in result["error_message"].lower()
+
+
+class TestCriterionSpecificScoring:
+    """Tests with criterion-specific mock responses."""
+
+    @pytest.fixture
+    def varied_mock_provider(self):
+        """Returns different scores per criterion for more realistic tests."""
+        provider = MagicMock()
+        mock_model = MagicMock()
+        structured_model = AsyncMock()
+
+        scores = {
+            "clarity": 90, "specificity": 70, "structure": 85,
+            "context_setting": 60, "output_format_guidance": 45, "constraint_definition": 30,
+        }
+        call_count = 0
+
+        async def dynamic_invoke(messages):
+            nonlocal call_count
+            # Extract criterion from system message content
+            content = messages[0].content.lower()
+            for criterion, score in scores.items():
+                if criterion.replace("_", " ").replace("_", "-") in content or criterion.replace("_", " ") in content:
+                    return CriterionOutput(
+                        score=score,
+                        feedback=f"Feedback for {criterion}",
+                        improvement_suggestions=[f"Improve {criterion}"]
+                        if score < 80 else [],
+                    )
+            # Fallback
+            return CriterionOutput(score=50, feedback="Generic", improvement_suggestions=[])
+
+        structured_model.ainvoke = dynamic_invoke
+        mock_model.with_structured_output.return_value = structured_model
+        provider.get_chat_model.return_value = mock_model
+        return provider
+
+    @pytest.mark.asyncio
+    async def test_varied_scores_aggregate_correctly(self, varied_mock_provider, sample_state):
+        with patch("app.agents.evaluator.create_provider", return_value=varied_mock_provider):
+            graph = build_evaluation_graph()
+            result = await graph.ainvoke(sample_state)
+
+        assert result["status"] == "completed"
+        # (90 + 70 + 85 + 60 + 45 + 30) / 6 = 63.33
+        assert abs(result["overall_score"] - 63.33) < 0.1
+```
+
+**Approach B: Use `FakeListChatModel` for simpler cases**
+
+LangChain provides `langchain_core.language_models.fake.FakeListChatModel` for deterministic testing without mocking:
+
+```python
+from langchain_core.language_models import FakeListChatModel
+import json
+
+def make_fake_provider(score: int = 75):
+    """Create a provider that returns pre-canned JSON responses."""
+    response = json.dumps({
+        "score": score,
+        "feedback": "Test feedback",
+        "improvement_suggestions": ["Test suggestion"],
+    })
+    fake_model = FakeListChatModel(responses=[response] * 6)
+
+    provider = MagicMock()
+    provider.get_chat_model.return_value = fake_model
+    return provider
+```
+
+**Note:** `FakeListChatModel` does not support `with_structured_output()`, so if your code uses that method, Approach A (mocking at the structured model level) is more reliable.
+
+**Approach C: Fixture-based response files (for regression tests)**
+
+```python
+# backend/tests/agents/fixtures/clarity_high.json
+{
+    "score": 92,
+    "feedback": "The prompt uses clear, unambiguous language...",
+    "improvement_suggestions": []
+}
+
+# In test:
+@pytest.fixture
+def clarity_fixture():
+    path = Path(__file__).parent / "fixtures" / "clarity_high.json"
+    return CriterionOutput.model_validate_json(path.read_text())
+```
+
+**Testing best practices summary:**
+
+1. **Never call real LLMs in CI** -- always mock at the provider boundary.
+2. **Mock at the highest reasonable level** -- mock `create_provider()` so you test the full node logic, not just the LLM call.
+3. **Test the graph topology** -- verify all 6 criteria appear in results, verify the reducer merges correctly.
+4. **Test error paths** -- empty prompts, LLM timeouts (mock raising an exception), malformed LLM responses.
+5. **Use `pytest.mark.asyncio`** -- all LangGraph 0.2+ invocations are async via `ainvoke`.
+6. **Inject the provider** -- the `_llm_evaluate_criterion` function accepts an optional `provider` parameter, making it trivially testable without patching.
+
+---
+
+### Summary of File Mapping to Your Plan
+
+| Your Planned File | Responsibility | Key Pattern |
+|---|---|---|
+| `backend/app/agents/evaluator.py` | StateGraph definition, node functions, graph compilation | Fan-out via `Send`, `Annotated` reducer |
+| `backend/app/agents/criteria.py` | Criterion definitions, system prompts, `CriterionOutput` Pydantic model | Data-driven criterion registry |
+| `backend/app/agents/provider.py` | LLM provider abstraction (`Protocol`), factory function | Strategy pattern, deferred imports |
+| `backend/app/services/evaluation_service.py` | Orchestrates graph invocation, converts TypedDict to Pydantic, persists to DB | Service layer, TypedDict-to-Pydantic bridge |
+| `backend/tests/agents/test_evaluator.py` | Unit + integration tests with mocked LLM | Provider mock injection, `patch` on factory |
+
+This architecture gives you parallel evaluation for latency (matching your SC-004 60-second budget), clean separation between the graph state (TypedDict) and your API schemas (Pydantic), swappable LLM providers, and fully deterministic tests.</result>
+<usage>total_tokens: 27751
+tool_uses: 13
+duration_ms: 132959</usage>
+</task-notification>
+Full transcript available at: /tmp/claude-1000/-mnt-c-projects-prompt-vault/tasks/a766a5f.output
+
+---
+
+<task-notification>
+<task-id>a47f3dc</task-id>
+<status>completed</status>
+<summary>Agent "Research React + TanStack Query patterns" completed</summary>
+<result>Now I have the full context of your project. Let me provide a comprehensive research writeup based on my deep knowledge of TanStack Query v5, React 19, React Router v7, and Vite 6, tailored to the PromptVault project.
+
+---
+
+# TanStack Query v5 + React 19 + TypeScript: Patterns for PromptVault
+
+Below are concrete, production-ready patterns organized around your five requirements. All recommendations are aligned with the project structure defined in `/mnt/c/projects/prompt-vault/specs/001-prompt-repository-api/plan.md` and the constitution at `/mnt/c/projects/prompt-vault/.specify/memory/constitution.md`.
+
+---
+
+## 1. TanStack Query v5 Setup with React 19
+
+### Package Installation
+
+```bash
+npm install @tanstack/react-query@^5
+npm install -D @tanstack/react-query-devtools@^5
+```
+
+### QueryClient Configuration (`frontend/src/lib/queryClient.ts`)
+
+TanStack Query v5 removed the deprecated `onSuccess`/`onError`/`onSettled` callbacks from `useQuery`. All global configuration moves to `defaultOptions`. React 19 is fully supported from TQ v5.45+.
+
+```typescript
+import { QueryClient } from '@tanstack/react-query';
+
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Keep data fresh for 30s before refetching
+      staleTime: 30 * 1000,
+      // Cache unused data for 5 minutes
+      gcTime: 5 * 60 * 1000,
+      // Retry failed queries 2 times with exponential backoff
+      retry: 2,
+      // Refetch on window focus for fresh data
+      refetchOnWindowFocus: true,
+      // Do not refetch on reconnect automatically
+      refetchOnReconnect: 'always',
+    },
+    mutations: {
+      // No global mutation defaults needed for MVP
+    },
+  },
+});
+```
+
+### Provider Setup (`frontend/src/main.tsx`)
+
+```typescript
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+import { queryClient } from './lib/queryClient';
+import { App } from './App';
+import './index.css';
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <App />
+      <ReactQueryDevtools initialIsOpen={false} />
+    </QueryClientProvider>
+  </StrictMode>,
+);
+```
+
+### Key v5 Changes to Be Aware Of
+
+- `cacheTime` was renamed to `gcTime` (garbage collection time).
+- `useQuery` no longer accepts `onSuccess`/`onError`/`onSettled` callbacks -- use the `useEffect` pattern or move logic to `useMutation`.
+- All hooks require a single object argument: `useQuery({ queryKey, queryFn })` -- the positional `useQuery(key, fn, options)` form is gone.
+- `status: 'loading'` was renamed to `status: 'pending'`.
+- `isInitialLoading` was renamed to `isLoading` (which now means `isPending && isFetching`).
+- TypeScript inference is significantly improved -- you rarely need to pass generic type parameters explicitly.
+
+---
+
+## 2. Query Key Factory Pattern for Related Resources
+
+This is the most critical architectural pattern for PromptVault. A query key factory provides type-safe, hierarchical, and invalidatable keys. The pattern uses a factory object per resource domain, with keys structured from broad to specific so that `queryClient.invalidateQueries` can target any level of the hierarchy.
+
+### Query Key Factory (`frontend/src/lib/queryKeys.ts`)
+
+```typescript
+// ─── Types ───────────────────────────────────────────────────────
+import type { PromptCategory } from '../types/prompt';
+
+interface PromptListFilters {
+  category?: PromptCategory;
+  search?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+interface EvaluationListFilters {
+  promptId?: string;
+  versionId?: string;
+  category?: PromptCategory;
+}
+
+// ─── Query Key Factories ─────────────────────────────────────────
+
+export const promptKeys = {
+  // Level 0: invalidate EVERYTHING prompt-related
+  all: ['prompts'] as const,
+
+  // Level 1: invalidate all prompt lists (any filter combination)
+  lists: () => [...promptKeys.all, 'list'] as const,
+
+  // Level 2: invalidate a specific filtered list
+  list: (filters: PromptListFilters) =>
+    [...promptKeys.lists(), filters] as const,
+
+  // Level 1: invalidate all prompt details
+  details: () => [...promptKeys.all, 'detail'] as const,
+
+  // Level 2: invalidate a specific prompt's detail
+  detail: (promptId: string) =>
+    [...promptKeys.details(), promptId] as const,
+
+  // Level 3: a specific prompt's versions
+  versions: (promptId: string) =>
+    [...promptKeys.detail(promptId), 'versions'] as const,
+
+  // Level 4: a specific version
+  version: (promptId: string, versionId: string) =>
+    [...promptKeys.versions(promptId), versionId] as const,
+} as const;
+
+export const evaluationKeys = {
+  // Level 0: invalidate ALL evaluation data
+  all: ['evaluations'] as const,
+
+  // Level 1: lists
+  lists: () => [...evaluationKeys.all, 'list'] as const,
+
+  // Level 2: filtered list
+  list: (filters: EvaluationListFilters) =>
+    [...evaluationKeys.lists(), filters] as const,
+
+  // Level 1: details
+  details: () => [...evaluationKeys.all, 'detail'] as const,
+
+  // Level 2: specific evaluation
+  detail: (evaluationId: string) =>
+    [...evaluationKeys.details(), evaluationId] as const,
+
+  // Dashboard aggregations (separate branch)
+  dashboard: () => [...evaluationKeys.all, 'dashboard'] as const,
+
+  // Dashboard filtered by category
+  dashboardByCategory: (category: PromptCategory) =>
+    [...evaluationKeys.dashboard(), category] as const,
+} as const;
+```
+
+### Why This Hierarchy Matters
+
+The key hierarchy enables precise or broad cache invalidation:
+
+```typescript
+// After creating a prompt:
+queryClient.invalidateQueries({ queryKey: promptKeys.lists() });
+// Invalidates ALL list queries regardless of filters, but NOT details.
+
+// After editing a specific prompt:
+queryClient.invalidateQueries({ queryKey: promptKeys.detail('abc-123') });
+// Invalidates that prompt's detail AND its versions (children).
+
+// After running an evaluation:
+queryClient.invalidateQueries({ queryKey: evaluationKeys.all });
+queryClient.invalidateQueries({ queryKey: promptKeys.detail(promptId) });
+// Invalidates all evaluation caches AND the prompt detail.
+
+// Nuclear option -- rarely needed:
+queryClient.invalidateQueries({ queryKey: promptKeys.all });
+// Invalidates everything: all lists, all details, all versions.
+```
+
+---
+
+## 3. Typed API Service Layer and Custom Hooks
+
+### API Client (`frontend/src/services/api.ts`)
+
+```typescript
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
+
+class ApiError extends Error {
+  constructor(
+    public status: number,
+    public detail: string,
+    public code?: string,
+    public field?: string,
+  ) {
+    super(detail);
+    this.name = 'ApiError';
+  }
+}
+
+async function apiFetch<T>(
+  path: string,
+  options?: RequestInit,
+): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options?.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({
+      detail: response.statusText,
+    }));
+    throw new ApiError(
+      response.status,
+      body.detail ?? 'Unknown error',
+      body.code,
+      body.field,
+    );
+  }
+
+  // Handle 204 No Content
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  return response.json() as Promise<T>;
+}
+
+export { apiFetch, ApiError, API_BASE_URL };
+```
+
+### Prompt Service (`frontend/src/services/promptService.ts`)
+
+```typescript
+import { apiFetch } from './api';
+import type {
+  Prompt,
+  PromptDetail,
+  PromptVersion,
+  CreatePromptPayload,
+  UpdatePromptPayload,
+  PromptListResponse,
+} from '../types/prompt';
+
+export const promptService = {
+  list: (params?: {
+    category?: string;
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<PromptListResponse> => {
+    const searchParams = new URLSearchParams();
+    if (params?.category) searchParams.set('category', params.category);
+    if (params?.search) searchParams.set('search', params.search);
+    if (params?.page) searchParams.set('page', String(params.page));
+    if (params?.pageSize) searchParams.set('page_size', String(params.pageSize));
+    const qs = searchParams.toString();
+    return apiFetch<PromptListResponse>(`/api/prompts${qs ? `?${qs}` : ''}`);
+  },
+
+  getById: (id: string): Promise<PromptDetail> =>
+    apiFetch<PromptDetail>(`/api/prompts/${id}`),
+
+  create: (payload: CreatePromptPayload): Promise<Prompt> =>
+    apiFetch<Prompt>('/api/prompts', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  update: (id: string, payload: UpdatePromptPayload): Promise<Prompt> =>
+    apiFetch<Prompt>(`/api/prompts/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  delete: (id: string): Promise<void> =>
+    apiFetch<void>(`/api/prompts/${id}`, { method: 'DELETE' }),
+
+  getVersions: (promptId: string): Promise<PromptVersion[]> =>
+    apiFetch<PromptVersion[]>(`/api/prompts/${promptId}/versions`),
+
+  getVersion: (promptId: string, versionId: string): Promise<PromptVersion> =>
+    apiFetch<PromptVersion>(
+      `/api/prompts/${promptId}/versions/${versionId}`,
+    ),
+
+  restoreVersion: (
+    promptId: string,
+    versionId: string,
+  ): Promise<Prompt> =>
+    apiFetch<Prompt>(
+      `/api/prompts/${promptId}/versions/${versionId}/restore`,
+      { method: 'POST' },
+    ),
+};
+```
+
+### TanStack Query Hooks (`frontend/src/hooks/usePrompts.ts`)
+
+```typescript
+import {
+  useQuery,
+  useMutation,
+  useQueryClient,
+  queryOptions,
+  type UseMutationOptions,
+} from '@tanstack/react-query';
+import { promptService } from '../services/promptService';
+import { promptKeys, evaluationKeys } from '../lib/queryKeys';
+import type {
+  Prompt,
+  PromptDetail,
+  PromptVersion,
+  CreatePromptPayload,
+  UpdatePromptPayload,
+  PromptCategory,
+} from '../types/prompt';
+
+// ─── Query Options Factories ─────────────────────────────────────
+// queryOptions() gives you a reusable, type-safe config object
+// that can be used in useQuery, prefetching, or loader functions.
+
+interface PromptListFilters {
+  category?: PromptCategory;
+  search?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export function promptListOptions(filters: PromptListFilters = {}) {
+  return queryOptions({
+    queryKey: promptKeys.list(filters),
+    queryFn: () => promptService.list(filters),
+    // Keep search/filter results fresh for 15s
+    staleTime: 15 * 1000,
+  });
+}
+
+export function promptDetailOptions(promptId: string) {
+  return queryOptions({
+    queryKey: promptKeys.detail(promptId),
+    queryFn: () => promptService.getById(promptId),
+    // Detail pages can be stale longer
+    staleTime: 60 * 1000,
+  });
+}
+
+export function promptVersionsOptions(promptId: string) {
+  return queryOptions({
+    queryKey: promptKeys.versions(promptId),
+    queryFn: () => promptService.getVersions(promptId),
+  });
+}
+
+// ─── Query Hooks ─────────────────────────────────────────────────
+
+export function usePromptList(filters: PromptListFilters = {}) {
+  return useQuery(promptListOptions(filters));
+}
+
+export function usePromptDetail(promptId: string) {
+  return useQuery(promptDetailOptions(promptId));
+}
+
+export function usePromptVersions(promptId: string) {
+  return useQuery(promptVersionsOptions(promptId));
+}
+
+export function usePromptVersion(promptId: string, versionId: string) {
+  return useQuery({
+    queryKey: promptKeys.version(promptId, versionId),
+    queryFn: () => promptService.getVersion(promptId, versionId),
+    enabled: !!versionId,
+  });
+}
+
+// ─── Mutation Hooks ──────────────────────────────────────────────
+
+export function useCreatePrompt() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: CreatePromptPayload) =>
+      promptService.create(payload),
+
+    onSuccess: () => {
+      // Invalidate all list queries so they refetch with the new prompt
+      queryClient.invalidateQueries({ queryKey: promptKeys.lists() });
+    },
+  });
+}
+
+export function useUpdatePrompt(promptId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: UpdatePromptPayload) =>
+      promptService.update(promptId, payload),
+
+    onSuccess: (updatedPrompt) => {
+      // Update the detail cache directly with returned data
+      queryClient.setQueryData(
+        promptKeys.detail(promptId),
+        updatedPrompt,
+      );
+      // Invalidate lists (title/description may have changed)
+      queryClient.invalidateQueries({ queryKey: promptKeys.lists() });
+      // Invalidate versions (a new version was created)
+      queryClient.invalidateQueries({
+        queryKey: promptKeys.versions(promptId),
+      });
+    },
+  });
+}
+
+export function useDeletePrompt() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (promptId: string) => promptService.delete(promptId),
+
+    onSuccess: (_data, promptId) => {
+      // Remove the detail from cache
+      queryClient.removeQueries({
+        queryKey: promptKeys.detail(promptId),
+      });
+      // Refetch all lists
+      queryClient.invalidateQueries({ queryKey: promptKeys.lists() });
+    },
+  });
+}
+
+export function useRestoreVersion(promptId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (versionId: string) =>
+      promptService.restoreVersion(promptId, versionId),
+
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: promptKeys.detail(promptId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: promptKeys.versions(promptId),
+      });
+      queryClient.invalidateQueries({ queryKey: promptKeys.lists() });
+    },
+  });
+}
+```
+
+### Evaluation Hooks (`frontend/src/hooks/useEvaluations.ts`)
+
+```typescript
+import {
+  useQuery,
+  useMutation,
+  useQueryClient,
+  queryOptions,
+} from '@tanstack/react-query';
+import { evaluationService } from '../services/evaluationService';
+import { evaluationKeys, promptKeys } from '../lib/queryKeys';
+import type { PromptCategory } from '../types/prompt';
+
+export function evaluationDetailOptions(evaluationId: string) {
+  return queryOptions({
+    queryKey: evaluationKeys.detail(evaluationId),
+    queryFn: () => evaluationService.getById(evaluationId),
+  });
+}
+
+export function evaluationDashboardOptions(category?: PromptCategory) {
+  return queryOptions({
+    queryKey: category
+      ? evaluationKeys.dashboardByCategory(category)
+      : evaluationKeys.dashboard(),
+    queryFn: () => evaluationService.getDashboard(category),
+    // Dashboard data can be stale longer
+    staleTime: 2 * 60 * 1000,
+  });
+}
+
+export function useEvaluationsByPrompt(promptId: string) {
+  return useQuery({
+    queryKey: evaluationKeys.list({ promptId }),
+    queryFn: () => evaluationService.listByPrompt(promptId),
+  });
+}
+
+export function useEvaluationDetail(evaluationId: string) {
+  return useQuery(evaluationDetailOptions(evaluationId));
+}
+
+export function useEvaluationDashboard(category?: PromptCategory) {
+  return useQuery(evaluationDashboardOptions(category));
+}
+
+export function useTriggerEvaluation(promptId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (versionId?: string) =>
+      evaluationService.trigger(promptId, versionId),
+
+    onSuccess: () => {
+      // Invalidate evaluation lists for this prompt
+      queryClient.invalidateQueries({
+        queryKey: evaluationKeys.list({ promptId }),
+      });
+      // Invalidate dashboard (new evaluation affects aggregation)
+      queryClient.invalidateQueries({
+        queryKey: evaluationKeys.dashboard(),
+      });
+    },
+  });
+}
+```
+
+---
+
+## 4. Optimistic Update Patterns for CRUD Operations
+
+Optimistic updates are most valuable for operations where the user expects immediate feedback. For PromptVault, the best candidates are: **delete from list** (remove the card immediately), **update prompt** (show saved state immediately), and **toggling evaluations**. Create operations typically navigate away, so optimistic updates are less critical there.
+
+### Pattern: Optimistic Delete from List
+
+```typescript
+export function useDeletePromptOptimistic() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (promptId: string) => promptService.delete(promptId),
+
+    onMutate: async (promptId) => {
+      // 1. Cancel any in-flight refetches so they don't overwrite our optimistic update
+      await queryClient.cancelQueries({ queryKey: promptKeys.lists() });
+
+      // 2. Snapshot the current list caches for rollback
+      const previousLists = queryClient.getQueriesData({
+        queryKey: promptKeys.lists(),
+      });
+
+      // 3. Optimistically remove the prompt from all cached lists
+      queryClient.setQueriesData(
+        { queryKey: promptKeys.lists() },
+        (old: PromptListResponse | undefined) => {
+          if (!old) return old;
+          return {
+            ...old,
+            items: old.items.filter((p) => p.id !== promptId),
+            total: old.total - 1,
+          };
+        },
+      );
+
+      // 4. Return the snapshot as context for rollback
+      return { previousLists };
+    },
+
+    onError: (_error, _promptId, context) => {
+      // 5. Rollback: restore all list caches from the snapshot
+      if (context?.previousLists) {
+        for (const [queryKey, data] of context.previousLists) {
+          queryClient.setQueryData(queryKey, data);
+        }
+      }
+    },
+
+    onSettled: () => {
+      // 6. Always refetch to ensure cache matches server truth
+      queryClient.invalidateQueries({ queryKey: promptKeys.lists() });
+    },
+  });
+}
+```
+
+### Pattern: Optimistic Update for Prompt Edit
+
+```typescript
+export function useUpdatePromptOptimistic(promptId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: UpdatePromptPayload) =>
+      promptService.update(promptId, payload),
+
+    onMutate: async (payload) => {
+      await queryClient.cancelQueries({
+        queryKey: promptKeys.detail(promptId),
+      });
+
+      const previousDetail = queryClient.getQueryData<PromptDetail>(
+        promptKeys.detail(promptId),
+      );
+
+      if (previousDetail) {
+        // Optimistically merge the update into the cached detail
+        queryClient.setQueryData<PromptDetail>(
+          promptKeys.detail(promptId),
+          {
+            ...previousDetail,
+            title: payload.title ?? previousDetail.title,
+            description: payload.description ?? previousDetail.description,
+            category: payload.category ?? previousDetail.category,
+            updatedAt: new Date().toISOString(),
+          },
+        );
+      }
+
+      return { previousDetail };
+    },
+
+    onError: (_error, _payload, context) => {
+      if (context?.previousDetail) {
+        queryClient.setQueryData(
+          promptKeys.detail(promptId),
+          context.previousDetail,
+        );
+      }
+    },
+
+    onSettled: () => {
+      queryClient.invalidateQueries({
+        queryKey: promptKeys.detail(promptId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: promptKeys.versions(promptId),
+      });
+      queryClient.invalidateQueries({ queryKey: promptKeys.lists() });
+    },
+  });
+}
+```
+
+### When NOT to Use Optimistic Updates
+
+- **Create prompt**: The user navigates to the new prompt's detail page after creation. A simple `invalidateQueries` in `onSuccess` is sufficient -- the navigation triggers a fresh fetch.
+- **Trigger evaluation**: Evaluations are long-running (up to 60 seconds per your spec). Use a `pending` status indicator and polling instead of optimistic updates. The mutation sets local state to "evaluating", and the evaluation list query uses `refetchInterval` while an evaluation is pending:
+
+```typescript
+export function useEvaluationsByPromptWithPolling(promptId: string) {
+  const query = useQuery({
+    queryKey: evaluationKeys.list({ promptId }),
+    queryFn: () => evaluationService.listByPrompt(promptId),
+    // Poll every 5 seconds if any evaluation is pending
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const hasPending = data?.some((e) => e.status === 'pending');
+      return hasPending ? 5000 : false;
+    },
+  });
+
+  return query;
+}
+```
+
+---
+
+## 5. React Router v7 Setup with Vite 6
+
+React Router v7 has two modes: **framework mode** (using the `@react-router/dev` Vite plugin and file-based routing) and **library mode** (traditional `createBrowserRouter` approach). For PromptVault, I recommend **library mode** because you have a clear, hand-crafted route structure and do not need file-based routing conventions.
+
+### Vite Configuration (`frontend/vite.config.ts`)
+
+```typescript
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+
+export default defineConfig({
+  plugins: [
+    react(),
+    tailwindcss(),
+  ],
+  server: {
+    port: 3000,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
+  },
+  resolve: {
+    alias: {
+      '@': '/src',
+    },
+  },
+});
+```
+
+Note: Tailwind CSS v4 uses the `@tailwindcss/vite` plugin directly -- there is no separate `tailwind.config.ts` file. Configuration is done via CSS `@theme` directives.
+
+### Router Configuration (`frontend/src/router.tsx`)
+
+```typescript
+import { createBrowserRouter } from 'react-router';
+import { Layout } from './components/shared/Layout';
+import { ErrorBoundary } from './components/shared/ErrorBoundary';
+
+// Lazy-load pages for code splitting
+const PromptsPage = lazy(() => import('./pages/PromptsPage'));
+const PromptDetailPage = lazy(() => import('./pages/PromptDetailPage'));
+const CreatePromptPage = lazy(() => import('./pages/CreatePromptPage'));
+const EditPromptPage = lazy(() => import('./pages/EditPromptPage'));
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+
+import { lazy, Suspense } from 'react';
+import { LoadingSpinner } from './components/shared/LoadingSpinner';
+
+function SuspenseWrapper({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>;
+}
+
+export const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <Layout />,
+    errorElement: <ErrorBoundary />,
+    children: [
+      {
+        index: true,
+        element: (
+          <SuspenseWrapper>
+            <PromptsPage />
+          </SuspenseWrapper>
+        ),
+      },
+      {
+        path: 'prompts/new',
+        element: (
+          <SuspenseWrapper>
+            <CreatePromptPage />
+          </SuspenseWrapper>
+        ),
+      },
+      {
+        path: 'prompts/:promptId',
+        element: (
+          <SuspenseWrapper>
+            <PromptDetailPage />
+          </SuspenseWrapper>
+        ),
+      },
+      {
+        path: 'prompts/:promptId/edit',
+        element: (
+          <SuspenseWrapper>
+            <EditPromptPage />
+          </SuspenseWrapper>
+        ),
+      },
+      {
+        path: 'dashboard',
+        element: (
+          <SuspenseWrapper>
+            <DashboardPage />
+          </SuspenseWrapper>
+        ),
+      },
+    ],
+  },
+]);
+```
+
+### App Entry (`frontend/src/App.tsx`)
+
+```typescript
+import { RouterProvider } from 'react-router';
+import { router } from './router';
+
+export function App() {
+  return <RouterProvider router={router} />;
+}
+```
+
+### Optional: Route-Level Data Prefetching with `loader`
+
+React Router v7 supports `loader` functions that can prefetch TanStack Query data before the component renders. This is where the `queryOptions` factories pay off:
+
+```typescript
+import { queryClient } from './lib/queryClient';
+import { promptDetailOptions, promptVersionsOptions } from './hooks/usePrompts';
+
+// In the route definition:
+{
+  path: 'prompts/:promptId',
+  loader: async ({ params }) => {
+    const promptId = params.promptId!;
+    // ensureQueryData fetches only if the cache is stale or empty
+    await Promise.all([
+      queryClient.ensureQueryData(promptDetailOptions(promptId)),
+      queryClient.ensureQueryData(promptVersionsOptions(promptId)),
+    ]);
+    return null; // Data is in the TQ cache, not in loader return
+  },
+  element: (
+    <SuspenseWrapper>
+      <PromptDetailPage />
+    </SuspenseWrapper>
+  ),
+}
+```
+
+This eliminates loading spinners on navigation -- the data is already in the cache when the component mounts.
+
+---
+
+## 6. Component Organization: Container vs. Presentational Split
+
+Your constitution at `/mnt/c/projects/prompt-vault/.specify/memory/constitution.md` (Principle II) explicitly requires: "Container components handle data fetching; presentational components handle rendering." Here is how to implement that cleanly with TanStack Query.
+
+### Architecture Overview
+
+```
+frontend/src/
+├── components/
+│   ├── prompts/
+│   │   ├── PromptList.tsx              # Presentational: renders list of prompts
+│   │   ├── PromptListItem.tsx          # Presentational: single prompt card
+│   │   ├── PromptDetail.tsx            # Presentational: renders prompt detail
+│   │   ├── PromptForm.tsx              # Presentational: controlled form
+│   │   ├── PromptVersionHistory.tsx    # Presentational: version list
+│   │   ├── PromptVersionDiff.tsx       # Presentational: version comparison
+│   │   └── CategoryFilter.tsx          # Presentational: filter UI
+│   ├── evaluations/
+│   │   ├── EvaluationReport.tsx        # Presentational: single evaluation report
+│   │   ├── EvaluationDashboard.tsx     # Presentational: charts/aggregation display
+│   │   ├── CriterionScore.tsx          # Presentational: single criterion bar
+│   │   └── ImprovementSuggestions.tsx  # Presentational: suggestion list
+│   └── shared/
+│       ├── Layout.tsx
+│       ├── ErrorBoundary.tsx
+│       ├── LoadingSpinner.tsx
+│       └── EmptyState.tsx
+├── pages/                              # CONTAINERS: data fetching lives here
+│   ├── PromptsPage.tsx
+│   ├── PromptDetailPage.tsx
+│   ├── CreatePromptPage.tsx
+│   ├── EditPromptPage.tsx
+│   └── DashboardPage.tsx
+├── hooks/                              # TanStack Query hooks (bridge layer)
+│   ├── usePrompts.ts
+│   └── useEvaluations.ts
+├── services/                           # Raw API calls (no React dependency)
+│   ├── api.ts
+│   ├── promptService.ts
+│   └── evaluationService.ts
+├── types/
+│   ├── prompt.ts
+│   └── evaluation.ts
+└── lib/
+    ├── queryClient.ts
+    └── queryKeys.ts
+```
+
+### Example: PromptsPage (Container) + PromptList (Presentational)
+
+**Container -- `frontend/src/pages/PromptsPage.tsx`**
+
+```typescript
+import { useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router';
+import { usePromptList, useDeletePromptOptimistic } from '../hooks/usePrompts';
+import { PromptList } from '../components/prompts/PromptList';
+import { CategoryFilter } from '../components/prompts/CategoryFilter';
+import { LoadingSpinner } from '../components/shared/LoadingSpinner';
+import { EmptyState } from '../components/shared/EmptyState';
+import type { PromptCategory } from '../types/prompt';
+
+export default function PromptsPage() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Derive filter state from URL search params (single source of truth)
+  const category = (searchParams.get('category') as PromptCategory) ?? undefined;
+  const search = searchParams.get('search') ?? undefined;
+
+  // TanStack Query hook -- the ONLY data fetching in this component
+  const {
+    data: promptList,
+    isPending,
+    isError,
+    error,
+  } = usePromptList({ category, search });
+
+  const deleteMutation = useDeletePromptOptimistic();
+
+  // Event handlers that modify URL state or trigger mutations
+  const handleCategoryChange = (newCategory?: PromptCategory) => {
+    const params = new URLSearchParams(searchParams);
+    if (newCategory) {
+      params.set('category', newCategory);
+    } else {
+      params.delete('category');
+    }
+    setSearchParams(params);
+  };
+
+  const handleSearch = (query: string) => {
+    const params = new URLSearchParams(searchParams);
+    if (query) {
+      params.set('search', query);
+    } else {
+      params.delete('search');
+    }
+    setSearchParams(params);
+  };
+
+  const handlePromptClick = (promptId: string) => {
+    navigate(`/prompts/${promptId}`);
+  };
+
+  const handleDelete = (promptId: string) => {
+    deleteMutation.mutate(promptId);
+  };
+
+  // Render states
+  if (isPending) return <LoadingSpinner />;
+  if (isError) return <div>Error: {error.message}</div>;
+
+  return (
+    <div>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Prompts</h1>
+        <button
+          onClick={() => navigate('/prompts/new')}
+          className="rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+        >
+          Create Prompt
+        </button>
+      </div>
+
+      <CategoryFilter
+        selectedCategory={category}
+        onCategoryChange={handleCategoryChange}
+        onSearch={handleSearch}
+        searchValue={search ?? ''}
+      />
+
+      {promptList.items.length === 0 ? (
+        <EmptyState message="No prompts found" />
+      ) : (
+        <PromptList
+          prompts={promptList.items}
+          onPromptClick={handlePromptClick}
+          onDelete={handleDelete}
+          isDeleting={deleteMutation.isPending}
+        />
+      )}
+    </div>
+  );
+}
+```
+
+**Presentational -- `frontend/src/components/prompts/PromptList.tsx`**
+
+```typescript
+import type { Prompt } from '../../types/prompt';
+import { PromptListItem } from './PromptListItem';
+
+interface PromptListProps {
+  prompts: Prompt[];
+  onPromptClick: (promptId: string) => void;
+  onDelete: (promptId: string) => void;
+  isDeleting: boolean;
+}
+
+export function PromptList({
+  prompts,
+  onPromptClick,
+  onDelete,
+  isDeleting,
+}: PromptListProps) {
+  return (
+    <ul className="space-y-4" role="list">
+      {prompts.map((prompt) => (
+        <PromptListItem
+          key={prompt.id}
+          prompt={prompt}
+          onClick={() => onPromptClick(prompt.id)}
+          onDelete={() => onDelete(prompt.id)}
+          isDeleting={isDeleting}
+        />
+      ))}
+    </ul>
+  );
+}
+```
+
+The key principle: **presentational components receive data and callbacks as props; they never call `useQuery` or `useMutation`; they have zero knowledge of TanStack Query.** This makes them trivially testable -- you pass mock data as props and assert on rendered output.
+
+### Example: PromptDetailPage (Container)
+
+```typescript
+import { useParams, useNavigate } from 'react-router';
+import {
+  usePromptDetail,
+  usePromptVersions,
+  useRestoreVersion,
+} from '../hooks/usePrompts';
+import {
+  useEvaluationsByPromptWithPolling,
+  useTriggerEvaluation,
+} from '../hooks/useEvaluations';
+import { PromptDetail } from '../components/prompts/PromptDetail';
+import { PromptVersionHistory } from '../components/prompts/PromptVersionHistory';
+import { EvaluationReport } from '../components/evaluations/EvaluationReport';
+import { LoadingSpinner } from '../components/shared/LoadingSpinner';
+
+export default function PromptDetailPage() {
+  const { promptId } = useParams<{ promptId: string }>();
+  const navigate = useNavigate();
+
+  // Multiple parallel queries for the same page
+  const promptQuery = usePromptDetail(promptId!);
+  const versionsQuery = usePromptVersions(promptId!);
+  const evaluationsQuery = useEvaluationsByPromptWithPolling(promptId!);
+
+  // Mutations
+  const restoreMutation = useRestoreVersion(promptId!);
+  const triggerEvalMutation = useTriggerEvaluation(promptId!);
+
+  if (promptQuery.isPending) return <LoadingSpinner />;
+  if (promptQuery.isError) return <div>Error loading prompt</div>;
+
+  const prompt = promptQuery.data;
+
+  return (
+    <div className="space-y-8">
+      <PromptDetail
+        prompt={prompt}
+        onEdit={() => navigate(`/prompts/${promptId}/edit`)}
+        onEvaluate={() => triggerEvalMutation.mutate()}
+        isEvaluating={triggerEvalMutation.isPending}
+      />
+
+      <PromptVersionHistory
+        versions={versionsQuery.data ?? []}
+        isLoading={versionsQuery.isPending}
+        onRestore={(versionId) => restoreMutation.mutate(versionId)}
+        isRestoring={restoreMutation.isPending}
+      />
+
+      {evaluationsQuery.data?.map((evaluation) => (
+        <EvaluationReport key={evaluation.id} evaluation={evaluation} />
+      ))}
+    </div>
+  );
+}
+```
+
+---
+
+## 7. TypeScript Type Definitions
+
+### `frontend/src/types/prompt.ts`
+
+```typescript
+export type PromptCategory = 'orchestrator' | 'task_execution';
+
+export interface Prompt {
+  id: string;
+  title: string;
+  description: string;
+  category: PromptCategory;
+  currentVersionNumber: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PromptDetail extends Prompt {
+  currentVersion: PromptVersion;
+}
+
+export interface PromptVersion {
+  id: string;
+  promptId: string;
+  versionNumber: number;
+  content: string;
+  changeSummary: string;
+  createdAt: string;
+}
+
+export interface PromptListResponse {
+  items: Prompt[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface CreatePromptPayload {
+  title: string;
+  description: string;
+  content: string;
+  category: PromptCategory;
+}
+
+export interface UpdatePromptPayload {
+  title?: string;
+  description?: string;
+  content?: string;
+  category?: PromptCategory;
+  changeSummary?: string;
+}
+```
+
+### `frontend/src/types/evaluation.ts`
+
+```typescript
+export type EvaluationStatus = 'pending' | 'completed' | 'failed';
+
+export interface EvaluationCriterion {
+  name: string;
+  score: number;        // 0-100
+  feedback: string;
+  suggestion: string;
+}
+
+export interface Evaluation {
+  id: string;
+  promptId: string;
+  versionId: string;
+  versionNumber: number;
+  status: EvaluationStatus;
+  overallScore: number | null;
+  criteria: EvaluationCriterion[];
+  createdAt: string;
+  completedAt: string | null;
+  errorMessage: string | null;
+}
+
+export interface DashboardAggregation {
+  category: string;
+  promptCount: number;
+  evaluationCount: number;
+  averageOverallScore: number;
+  criteriaAverages: Record<string, number>;
+  commonImprovements: string[];
+}
+```
+
+---
+
+## Summary of Key Recommendations
+
+| Area | Recommendation | Rationale |
+|------|---------------|-----------|
+| **TQ v5 Setup** | Single `QueryClient` in `/lib/queryClient.ts`, `QueryClientProvider` in `main.tsx` | Separation of config from rendering; easy to import for prefetching in loaders |
+| **Query Keys** | Factory object pattern per domain (`promptKeys`, `evaluationKeys`) with `as const` | Type-safe, hierarchical invalidation at any granularity |
+| **Query Options** | Use `queryOptions()` factory functions exported from hooks file | Reusable in `useQuery`, loaders, and `ensureQueryData` -- single source of truth |
+| **Optimistic Updates** | Only for delete and inline edits; use `onMutate`/`onError`/`onSettled` triad | Create navigates away (no need); evaluations are async (polling is better) |
+| **Evaluation Polling** | `refetchInterval` that returns `5000` when pending evaluations exist, `false` otherwise | Spec says evaluations can take up to 60s; polling is the correct pattern |
+| **React Router v7** | Library mode with `createBrowserRouter`, lazy-loaded pages, optional loaders for prefetch | Framework mode adds unnecessary file-convention overhead for a hand-designed route tree |
+| **Vite 6** | `@tailwindcss/vite` plugin, `@vitejs/plugin-react`, dev proxy to backend | Tailwind v4 uses Vite plugin natively; proxy avoids CORS during development |
+| **Container/Presentational** | Pages are containers (call hooks, own state); Components are presentational (props only) | Constitution Principle II; makes components testable without mocking TQ |
+| **API Layer** | Thin `apiFetch` wrapper over `fetch`, typed service objects per domain | No need for Axios in 2026; native fetch is sufficient; typed services ensure end-to-end type safety |</result>
+<usage>total_tokens: 34732
+tool_uses: 17
+duration_ms: 164398</usage>
+</task-notification>
+Full transcript available at: /tmp/claude-1000/-mnt-c-projects-prompt-vault/tasks/a47f3dc.output
+
+---
+
+what is openai used for?
+
+---
+
+understood. Lets add Gemini as well in this context.
+
+---
+
+Specify in the plan section that the interface must be modern and minimalist, in a way that its easy for software engineers to navigate and visualize prompts and its data.
+
+---
+
+clarify the usage of the hooks in the frontend

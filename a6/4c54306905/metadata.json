@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "a64c54306905",
+  "strategy": "manual-commit",
+  "branch": "001-prompt-repository-api",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".specify/memory/constitution.md",
+    "CLAUDE.md",
+    "specs/001-prompt-repository-api/contracts/openapi.yaml",
+    "specs/001-prompt-repository-api/data-model.md",
+    "specs/001-prompt-repository-api/plan.md",
+    "specs/001-prompt-repository-api/quickstart.md",
+    "specs/001-prompt-repository-api/research.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a6/4c54306905/0/metadata.json",
+      "transcript": "/a6/4c54306905/0/full.jsonl",
+      "context": "/a6/4c54306905/0/context.md",
+      "content_hash": "/a6/4c54306905/0/content_hash.txt",
+      "prompt": "/a6/4c54306905/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 65,
+    "cache_creation_tokens": 187364,
+    "cache_read_tokens": 3767699,
+    "output_tokens": 22475,
+    "api_call_count": 48
+  }
+}
