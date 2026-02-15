@@ -1,0 +1,728 @@
+openapi: 3.1.0
+info:
+  title: PromptVault API
+  description: >
+    API for the PromptVault prompt repository with version control,
+    automated evaluation via LangGraph agents, and category-based organization.
+  version: 0.1.0
+  contact:
+    name: PromptVault Team
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+tags:
+  - name: prompts
+    description: Prompt CRUD operations and version management
+  - name: evaluations
+    description: Prompt evaluation trigger and results
+  - name: health
+    description: System health checks
+
+paths:
+  # ── Prompt CRUD ──────────────────────────────────────────────────
+
+  /api/prompts:
+    get:
+      tags: [prompts]
+      operationId: listPrompts
+      summary: List all active prompts
+      description: >
+        Returns a paginated list of active prompts with optional filtering
+        by category and text search. Supports FR-002, FR-017.
+      parameters:
+        - name: category
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/PromptCategory'
+          description: Filter by prompt category
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 200
+          description: Search prompts by title or content keywords (ILIKE)
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number for pagination
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Number of results per page
+      responses:
+        '200':
+          description: Paginated list of prompts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptListResponse'
+
+    post:
+      tags: [prompts]
+      operationId: createPrompt
+      summary: Create a new prompt
+      description: >
+        Creates a new prompt with initial version (version 1).
+        Supports FR-001.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromptCreate'
+      responses:
+        '201':
+          description: Prompt created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+
+  /api/prompts/{prompt_id}:
+    get:
+      tags: [prompts]
+      operationId: getPrompt
+      summary: Get prompt details
+      description: >
+        Returns full prompt details including current version content,
+        metadata, and version count. Supports FR-003.
+      parameters:
+        - $ref: '#/components/parameters/PromptId'
+      responses:
+        '200':
+          description: Prompt details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptDetailResponse'
+        '404':
+          description: Prompt not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      tags: [prompts]
+      operationId: updatePrompt
+      summary: Update a prompt
+      description: >
+        Updates prompt metadata and/or content. If content is changed,
+        a new version is automatically created. Requires lock_version
+        for optimistic concurrency control. Supports FR-004.
+      parameters:
+        - $ref: '#/components/parameters/PromptId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromptUpdate'
+      responses:
+        '200':
+          description: Prompt updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptDetailResponse'
+        '404':
+          description: Prompt not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict — prompt was modified by another request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+
+    delete:
+      tags: [prompts]
+      operationId: deletePrompt
+      summary: Soft-delete a prompt
+      description: >
+        Marks a prompt as inactive (soft delete). The prompt is retained
+        in the database but no longer appears in list or search results.
+        Cannot delete if an evaluation is in progress. Supports FR-005.
+      parameters:
+        - $ref: '#/components/parameters/PromptId'
+      responses:
+        '204':
+          description: Prompt deleted successfully
+        '404':
+          description: Prompt not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict — evaluation in progress for this prompt
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── Version Management ───────────────────────────────────────────
+
+  /api/prompts/{prompt_id}/versions:
+    get:
+      tags: [prompts]
+      operationId: listPromptVersions
+      summary: List version history for a prompt
+      description: >
+        Returns all versions of a prompt in reverse chronological order.
+        Supports FR-007.
+      parameters:
+        - $ref: '#/components/parameters/PromptId'
+      responses:
+        '200':
+          description: List of versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PromptVersionResponse'
+        '404':
+          description: Prompt not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/prompts/{prompt_id}/versions/{version_number}:
+    get:
+      tags: [prompts]
+      operationId: getPromptVersion
+      summary: Get a specific version of a prompt
+      description: >
+        Returns the full content of a specific version. Supports FR-008.
+      parameters:
+        - $ref: '#/components/parameters/PromptId'
+        - $ref: '#/components/parameters/VersionNumber'
+      responses:
+        '200':
+          description: Version details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptVersionResponse'
+        '404':
+          description: Prompt or version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/prompts/{prompt_id}/versions/{version_number}/restore:
+    post:
+      tags: [prompts]
+      operationId: restorePromptVersion
+      summary: Restore a previous version
+      description: >
+        Creates a new version with the content of the specified previous
+        version (non-destructive restore). Supports FR-009.
+      parameters:
+        - $ref: '#/components/parameters/PromptId'
+        - $ref: '#/components/parameters/VersionNumber'
+      responses:
+        '201':
+          description: New version created with restored content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptVersionResponse'
+        '404':
+          description: Prompt or version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── Evaluations ──────────────────────────────────────────────────
+
+  /api/prompts/{prompt_id}/evaluate:
+    post:
+      tags: [evaluations]
+      operationId: evaluatePrompt
+      summary: Trigger evaluation of the current prompt version
+      description: >
+        Triggers an automated quality evaluation of the prompt's current
+        version against 6 best-practice criteria. Returns the evaluation
+        result synchronously. Supports FR-010, FR-011, FR-012, FR-013.
+      parameters:
+        - $ref: '#/components/parameters/PromptId'
+      responses:
+        '201':
+          description: Evaluation completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationResponse'
+        '404':
+          description: Prompt not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Evaluation failed (agent error)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/evaluations/{evaluation_id}:
+    get:
+      tags: [evaluations]
+      operationId: getEvaluation
+      summary: Get evaluation details
+      description: >
+        Returns full evaluation results including per-criterion scores,
+        feedback, and improvement suggestions.
+      parameters:
+        - name: evaluation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Evaluation details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationResponse'
+        '404':
+          description: Evaluation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/evaluations/dashboard:
+    get:
+      tags: [evaluations]
+      operationId: getEvaluationDashboard
+      summary: Get aggregated evaluation dashboard
+      description: >
+        Returns aggregated evaluation results grouped by prompt category,
+        including average scores and most common improvement points.
+        Supports FR-014, FR-015.
+      parameters:
+        - name: category
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/PromptCategory'
+          description: Filter dashboard to a specific category
+      responses:
+        '200':
+          description: Dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardResponse'
+
+  # ── Health ────────────────────────────────────────────────────────
+
+  /api/health:
+    get:
+      tags: [health]
+      operationId: healthCheck
+      summary: System health check
+      description: >
+        Returns health status of the API and its dependencies (database).
+      responses:
+        '200':
+          description: System is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: System is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  parameters:
+    PromptId:
+      name: prompt_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Unique prompt identifier
+
+    VersionNumber:
+      name: version_number
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Version number (per-prompt sequential)
+
+  schemas:
+    # ── Enums ────────────────────────────────────────────────────
+
+    PromptCategory:
+      type: string
+      enum: [orchestrator, task_execution]
+      description: >
+        Prompt category. "orchestrator" for prompts that coordinate
+        multi-step workflows, "task_execution" for prompts that
+        perform a specific task.
+
+    EvaluationStatus:
+      type: string
+      enum: [pending, completed, failed]
+
+    # ── Prompt Schemas ───────────────────────────────────────────
+
+    PromptCreate:
+      type: object
+      required: [title, content, category]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+          default: ''
+        content:
+          type: string
+          minLength: 1
+          maxLength: 50000
+          description: Initial prompt content (creates version 1)
+        category:
+          $ref: '#/components/schemas/PromptCategory'
+
+    PromptUpdate:
+      type: object
+      required: [lock_version]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        content:
+          type: string
+          minLength: 1
+          maxLength: 50000
+          description: If provided and different from current, creates a new version
+        category:
+          $ref: '#/components/schemas/PromptCategory'
+        change_summary:
+          type: string
+          maxLength: 500
+          description: Description of changes (stored with the new version)
+        lock_version:
+          type: integer
+          description: >
+            Optimistic concurrency token. Must match the current lock_version
+            of the prompt. Obtained from the last GET response.
+
+    PromptResponse:
+      type: object
+      required: [id, title, description, category, is_active, lock_version, created_at, updated_at, version_count]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          $ref: '#/components/schemas/PromptCategory'
+        is_active:
+          type: boolean
+        lock_version:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        version_count:
+          type: integer
+          description: Total number of versions
+
+    PromptDetailResponse:
+      allOf:
+        - $ref: '#/components/schemas/PromptResponse'
+        - type: object
+          required: [current_version]
+          properties:
+            current_version:
+              $ref: '#/components/schemas/PromptVersionResponse'
+            latest_evaluation:
+              $ref: '#/components/schemas/EvaluationSummary'
+              description: Most recent evaluation for the current version, if any
+
+    PromptListResponse:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PromptResponse'
+        total:
+          type: integer
+          description: Total number of matching prompts
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    # ── Version Schemas ──────────────────────────────────────────
+
+    PromptVersionResponse:
+      type: object
+      required: [id, prompt_id, version_number, content, change_summary, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        prompt_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+        content:
+          type: string
+        change_summary:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Evaluation Schemas ───────────────────────────────────────
+
+    EvaluationSummary:
+      type: object
+      required: [id, overall_score, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        overall_score:
+          type: number
+          format: float
+          nullable: true
+        status:
+          $ref: '#/components/schemas/EvaluationStatus'
+        created_at:
+          type: string
+          format: date-time
+
+    EvaluationResponse:
+      type: object
+      required: [id, prompt_version_id, overall_score, status, criteria, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        prompt_version_id:
+          type: string
+          format: uuid
+        overall_score:
+          type: number
+          format: float
+          nullable: true
+        status:
+          $ref: '#/components/schemas/EvaluationStatus'
+        error_message:
+          type: string
+          nullable: true
+        criteria:
+          type: array
+          items:
+            $ref: '#/components/schemas/CriterionResponse'
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    CriterionResponse:
+      type: object
+      required: [criterion_name, score, feedback, improvement_suggestion]
+      properties:
+        criterion_name:
+          type: string
+          enum:
+            - clarity
+            - specificity
+            - structure
+            - context_setting
+            - output_format_guidance
+            - constraint_definition
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        feedback:
+          type: string
+        improvement_suggestion:
+          type: string
+
+    # ── Dashboard Schemas ────────────────────────────────────────
+
+    DashboardResponse:
+      type: object
+      required: [categories, total_evaluations]
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryDashboard'
+        total_evaluations:
+          type: integer
+
+    CategoryDashboard:
+      type: object
+      required: [category, avg_score, evaluation_count, criteria_breakdown, common_improvements]
+      properties:
+        category:
+          $ref: '#/components/schemas/PromptCategory'
+        avg_score:
+          type: number
+          format: float
+        evaluation_count:
+          type: integer
+        criteria_breakdown:
+          type: array
+          items:
+            $ref: '#/components/schemas/CriteriaBreakdown'
+        common_improvements:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommonImprovement'
+
+    CriteriaBreakdown:
+      type: object
+      required: [criterion_name, avg_score]
+      properties:
+        criterion_name:
+          type: string
+        avg_score:
+          type: number
+          format: float
+
+    CommonImprovement:
+      type: object
+      required: [criterion_name, occurrence_count, avg_score]
+      properties:
+        criterion_name:
+          type: string
+          description: Criterion that frequently scores below 80
+        occurrence_count:
+          type: integer
+          description: Number of evaluations where this criterion scored below 80
+        avg_score:
+          type: number
+          format: float
+          description: Average score for this criterion across evaluations
+
+    # ── Health Schemas ───────────────────────────────────────────
+
+    HealthResponse:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        checks:
+          type: object
+          properties:
+            database:
+              type: string
+              enum: [up, down]
+        version:
+          type: string
+          description: API version
+
+    # ── Error Schemas ────────────────────────────────────────────
+
+    ErrorResponse:
+      type: object
+      required: [detail, code]
+      properties:
+        detail:
+          type: string
+          description: Human-readable error message
+        code:
+          type: string
+          description: Machine-readable error code
+        field:
+          type: string
+          nullable: true
+          description: Field name for field-specific errors
+
+    ValidationErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            required: [loc, msg, type]
+            properties:
+              loc:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+                description: Location of the error (field path)
+              msg:
+                type: string
+                description: Error message
+              type:
+                type: string
+                description: Error type identifier
