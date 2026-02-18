@@ -36,7 +36,7 @@ SOLID principles and layered architecture:
   strategies MUST be addable without modifying existing service code.
   Use dependency injection and strategy patterns.
 - **Liskov Substitution**: All LLM provider integrations (Anthropic,
-  OpenAI) MUST be interchangeable behind a common interface.
+  OpenAI, Google Gemini) MUST be interchangeable behind a common interface.
 - **Interface Segregation**: Clients MUST NOT depend on methods they
   do not use. Keep Pydantic schemas purpose-specific (create, update,
   response) rather than reusing a single monolithic model.

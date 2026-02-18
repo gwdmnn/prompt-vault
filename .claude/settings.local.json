@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git fetch:*)",
+      "Bash(pwsh -File .specify/scripts/powershell/setup-plan.ps1:*)",
+      "Bash(powershell.exe:*)",
+      "Bash(python3:*)",
+      "Bash(pwsh -File:*)"
+    ]
+  }
+}

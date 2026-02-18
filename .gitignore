@@ -206,12 +206,28 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Claude
-.claude/
-
-# Entire 
+# Entire
 .entire/
 
-# Specify
-.specify/
+# ── Node.js / Frontend ─────────────────────────────
+node_modules/
+dist/
+.vite/
+*.local
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Docker
+pgdata/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
 
