@@ -1,0 +1,566 @@
+## User Input
+
+```text
+create the tasks for spec-001 feature implementation
+```
+
+You **MUST** consider the user input before proceeding (if not empty).
+
+## Outline
+
+1. **Setup**: Run `.specify/scripts/powershell/check-prerequisites.ps1 -Json` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
+
+2. **Load design documents**: Read from FEATURE_DIR:
+   - **Required**: plan.md (tech stack, libraries, structure), spec.md (user stories with priorities)
+   - **Optional**: data-model.md (entities), contracts/ (API endpoints), research.md (decisions), quickstart.md (test scenarios)
+   - Note: Not all projects have all documents. Generate tasks based on what's available.
+
+3. **Execute task generation workflow**:
+   - Load plan.md and extract tech stack, libraries, project structure
+   - Load spec.md and extract user stories with their priorities (P1, P2, P3, etc.)
+   - If data-model.md exists: Extract entities and map to user stories
+   - If contracts/ exists: Map endpoints to user stories
+   - If research.md exists: Extract decisions for setup tasks
+   - Generate tasks organized by user story (see Task Generation Rules below)
+   - Generate dependency graph showing user story completion order
+   - Create parallel execution examples per user story
+   - Validate task completeness (each user story has all needed tasks, independently testable)
+
+4. **Generate tasks.md**: Use `.specify/templates/tasks-template.md` as structure, fill with:
+   - Correct feature name from plan.md
+   - Phase 1: Setup tasks (project initialization)
+   - Phase 2: Foundational tasks (blocking prerequisites for all user stories)
+   - Phase 3+: One phase per user story (in priority order from spec.md)
+   - Each phase includes: story goal, independent test criteria, tests (if requested), implementation tasks
+   - Final Phase: Polish & cross-cutting concerns
+   - All tasks must follow the strict checklist format (see Task Generation Rules below)
+   - Clear file paths for each task
+   - Dependencies section showing story completion order
+   - Parallel execution examples per story
+   - Implementation strategy section (MVP first, incremental delivery)
+
+5. **Report**: Output path to generated tasks.md and summary:
+   - Total task count
+   - Task count per user story
+   - Parallel opportunities identified
+   - Independent test criteria for each story
+   - Suggested MVP scope (typically just User Story 1)
+   - Format validation: Confirm ALL tasks follow the checklist format (checkbox, ID, labels, file paths)
+
+Context for task generation: create the tasks for spec-001 feature implementation
+
+The tasks.md should be immediately executable - each task must be specific enough that an LLM can complete it without additional context.
+
+## Task Generation Rules
+
+**CRITICAL**: Tasks MUST be organized by user story to enable independent implementation and testing.
+
+**Tests are OPTIONAL**: Only generate test tasks if explicitly requested in the feature specification or if user requests TDD approach.
+
+### Checklist Format (REQUIRED)
+
+Every task MUST strictly follow this format:
+
+```text
+- [ ] [TaskID] [P?] [Story?] Description with file path
+```
+
+**Format Components**:
+
+1. **Checkbox**: ALWAYS start with `- [ ]` (markdown checkbox)
+2. **Task ID**: Sequential number (T001, T002, T003...) in execution order
+3. **[P] marker**: Include ONLY if task is parallelizable (different files, no dependencies on incomplete tasks)
+4. **[Story] label**: REQUIRED for user story phase tasks only
+   - Format: [US1], [US2], [US3], etc. (maps to user stories from spec.md)
+   - Setup phase: NO story label
+   - Foundational phase: NO story label  
+   - User Story phases: MUST have story label
+   - Polish phase: NO story label
+5. **Description**: Clear action with exact file path
+
+**Examples**:
+
+- ✅ CORRECT: `- [ ] T001 Create project structure per implementation plan`
+- ✅ CORRECT: `- [ ] T005 [P] Implement authentication middleware in src/middleware/auth.py`
+- ✅ CORRECT: `- [ ] T012 [P] [US1] Create User model in src/models/user.py`
+- ✅ CORRECT: `- [ ] T014 [US1] Implement UserService in src/services/user_service.py`
+- ❌ WRONG: `- [ ] Create User model` (missing ID and Story label)
+- ❌ WRONG: `T001 [US1] Create model` (missing checkbox)
+- ❌ WRONG: `- [ ] [US1] Create User model` (missing Task ID)
+- ❌ WRONG: `- [ ] T001 [US1] Create model` (missing file path)
+
+### Task Organization
+
+1. **From User Stories (spec.md)** - PRIMARY ORGANIZATION:
+   - Each user story (P1, P2, P3...) gets its own phase
+   - Map all related components to their story:
+     - Models needed for that story
+     - Services needed for that story
+     - Endpoints/UI needed for that story
+     - If tests requested: Tests specific to that story
+   - Mark story dependencies (most stories should be independent)
+
+2. **From Contracts**:
+   - Map each contract/endpoint → to the user story it serves
+   - If tests requested: Each contract → contract test task [P] before implementation in that story's phase
+
+3. **From Data Model**:
+   - Map each entity to the user story(ies) that need it
+   - If entity serves multiple stories: Put in earliest story or Setup phase
+   - Relationships → service layer tasks in appropriate story phase
+
+4. **From Setup/Infrastructure**:
+   - Shared infrastructure → Setup phase (Phase 1)
+   - Foundational/blocking tasks → Foundational phase (Phase 2)
+   - Story-specific setup → within that story's phase
+
+### Phase Structure
+
+- **Phase 1**: Setup (project initialization)
+- **Phase 2**: Foundational (blocking prerequisites - MUST complete before user stories)
+- **Phase 3+**: User Stories in priority order (P1, P2, P3...)
+  - Within each story: Tests (if requested) → Models → Services → Endpoints → Integration
+  - Each phase should be a complete, independently testable increment
+- **Final Phase**: Polish & Cross-Cutting Concerns
+
+---
+
+## User Input
+
+```text
+feature 001
+```
+
+You **MUST** consider the user input before proceeding (if not empty).
+
+## Outline
+
+1. Run `.specify/scripts/powershell/check-prerequisites.ps1 -Json -RequireTasks -IncludeTasks` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
+
+2. **Check checklists status** (if FEATURE_DIR/checklists/ exists):
+   - Scan all checklist files in the checklists/ directory
+   - For each checklist, count:
+     - Total items: All lines matching `- [ ]` or `- [X]` or `- [x]`
+     - Completed items: Lines matching `- [X]` or `- [x]`
+     - Incomplete items: Lines matching `- [ ]`
+   - Create a status table:
+
+     ```text
+     | Checklist | Total | Completed | Incomplete | Status |
+     |-----------|-------|-----------|------------|--------|
+     | ux.md     | 12    | 12        | 0          | ✓ PASS |
+     | test.md   | 8     | 5         | 3          | ✗ FAIL |
+     | security.md | 6   | 6         | 0          | ✓ PASS |
+     ```
+
+   - Calculate overall status:
+     - **PASS**: All checklists have 0 incomplete items
+     - **FAIL**: One or more checklists have incomplete items
+
+   - **If any checklist is incomplete**:
+     - Display the table with incomplete item counts
+     - **STOP** and ask: "Some checklists are incomplete. Do you want to proceed with implementation anyway? (yes/no)"
+     - Wait for user response before continuing
+     - If user says "no" or "wait" or "stop", halt execution
+     - If user says "yes" or "proceed" or "continue", proceed to step 3
+
+   - **If all checklists are complete**:
+     - Display the table showing all checklists passed
+     - Automatically proceed to step 3
+
+3. Load and analyze the implementation context:
+   - **REQUIRED**: Read tasks.md for the complete task list and execution plan
+   - **REQUIRED**: Read plan.md for tech stack, architecture, and file structure
+   - **IF EXISTS**: Read data-model.md for entities and relationships
+   - **IF EXISTS**: Read contracts/ for API specifications and test requirements
+   - **IF EXISTS**: Read research.md for technical decisions and constraints
+   - **IF EXISTS**: Read quickstart.md for integration scenarios
+
+4. **Project Setup Verification**:
+   - **REQUIRED**: Create/verify ignore files based on actual project setup:
+
+   **Detection & Creation Logic**:
+   - Check if the following command succeeds to determine if the repository is a git repo (create/verify .gitignore if so):
+
+     ```sh
+     git rev-parse --git-dir 2>/dev/null
+     ```
+
+   - Check if Dockerfile* exists or Docker in plan.md → create/verify .dockerignore
+   - Check if .eslintrc* exists → create/verify .eslintignore
+   - Check if eslint.config.* exists → ensure the config's `ignores` entries cover required patterns
+   - Check if .prettierrc* exists → create/verify .prettierignore
+   - Check if .npmrc or package.json exists → create/verify .npmignore (if publishing)
+   - Check if terraform files (*.tf) exist → create/verify .terraformignore
+   - Check if .helmignore needed (helm charts present) → create/verify .helmignore
+
+   **If ignore file already exists**: Verify it contains essential patterns, append missing critical patterns only
+   **If ignore file missing**: Create with full pattern set for detected technology
+
+   **Common Patterns by Technology** (from plan.md tech stack):
+   - **Node.js/JavaScript/TypeScript**: `node_modules/`, `dist/`, `build/`, `*.log`, `.env*`
+   - **Python**: `__pycache__/`, `*.pyc`, `.venv/`, `venv/`, `dist/`, `*.egg-info/`
+   - **Java**: `target/`, `*.class`, `*.jar`, `.gradle/`, `build/`
+   - **C#/.NET**: `bin/`, `obj/`, `*.user`, `*.suo`, `packages/`
+   - **Go**: `*.exe`, `*.test`, `vendor/`, `*.out`
+   - **Ruby**: `.bundle/`, `log/`, `tmp/`, `*.gem`, `vendor/bundle/`
+   - **PHP**: `vendor/`, `*.log`, `*.cache`, `*.env`
+   - **Rust**: `target/`, `debug/`, `release/`, `*.rs.bk`, `*.rlib`, `*.prof*`, `.idea/`, `*.log`, `.env*`
+   - **Kotlin**: `build/`, `out/`, `.gradle/`, `.idea/`, `*.class`, `*.jar`, `*.iml`, `*.log`, `.env*`
+   - **C++**: `build/`, `bin/`, `obj/`, `out/`, `*.o`, `*.so`, `*.a`, `*.exe`, `*.dll`, `.idea/`, `*.log`, `.env*`
+   - **C**: `build/`, `bin/`, `obj/`, `out/`, `*.o`, `*.a`, `*.so`, `*.exe`, `Makefile`, `config.log`, `.idea/`, `*.log`, `.env*`
+   - **Swift**: `.build/`, `DerivedData/`, `*.swiftpm/`, `Packages/`
+   - **R**: `.Rproj.user/`, `.Rhistory`, `.RData`, `.Ruserdata`, `*.Rproj`, `packrat/`, `renv/`
+   - **Universal**: `.DS_Store`, `Thumbs.db`, `*.tmp`, `*.swp`, `.vscode/`, `.idea/`
+
+   **Tool-Specific Patterns**:
+   - **Docker**: `node_modules/`, `.git/`, `Dockerfile*`, `.dockerignore`, `*.log*`, `.env*`, `coverage/`
+   - **ESLint**: `node_modules/`, `dist/`, `build/`, `coverage/`, `*.min.js`
+   - **Prettier**: `node_modules/`, `dist/`, `build/`, `coverage/`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`
+   - **Terraform**: `.terraform/`, `*.tfstate*`, `*.tfvars`, `.terraform.lock.hcl`
+   - **Kubernetes/k8s**: `*.secret.yaml`, `secrets/`, `.kube/`, `kubeconfig*`, `*.key`, `*.crt`
+
+5. Parse tasks.md structure and extract:
+   - **Task phases**: Setup, Tests, Core, Integration, Polish
+   - **Task dependencies**: Sequential vs parallel execution rules
+   - **Task details**: ID, description, file paths, parallel markers [P]
+   - **Execution flow**: Order and dependency requirements
+
+6. Execute implementation following the task plan:
+   - **Phase-by-phase execution**: Complete each phase before moving to the next
+   - **Respect dependencies**: Run sequential tasks in order, parallel tasks [P] can run together  
+   - **Follow TDD approach**: Execute test tasks before their corresponding implementation tasks
+   - **File-based coordination**: Tasks affecting the same files must run sequentially
+   - **Validation checkpoints**: Verify each phase completion before proceeding
+
+7. Implementation execution rules:
+   - **Setup first**: Initialize project structure, dependencies, configuration
+   - **Tests before code**: If you need to write tests for contracts, entities, and integration scenarios
+   - **Core development**: Implement models, services, CLI commands, endpoints
+   - **Integration work**: Database connections, middleware, logging, external services
+   - **Polish and validation**: Unit tests, performance optimization, documentation
+
+8. Progress tracking and error handling:
+   - Report progress after each completed task
+   - Halt execution if any non-parallel task fails
+   - For parallel tasks [P], continue with successful tasks, report failed ones
+   - Provide clear error messages with context for debugging
+   - Suggest next steps if implementation cannot proceed
+   - **IMPORTANT** For completed tasks, make sure to mark the task off as [X] in the tasks file.
+
+9. Completion validation:
+   - Verify all required tasks are completed
+   - Check that implemented features match the original specification
+   - Validate that tests pass and coverage meets requirements
+   - Confirm the implementation follows the technical plan
+   - Report final status with summary of completed work
+
+Note: This command assumes a complete task breakdown exists in tasks.md. If tasks are incomplete or missing, suggest running `/speckit.tasks` first to regenerate the task list.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **First User Message (speckit.tasks)**: User requested task generation for spec-001 feature implementation. I ran the prerequisites check, loaded all design documents (plan.md, spec.md, data-model.md, research.md, quickstart.md, contracts/openapi.yaml), and generated a comprehensive tasks.md with 70 tasks across 8 phases.
+
+2. **Second User Message (speckit.implement)**: User requested implementation of feature 001. I ran prerequisites check with -RequireTasks flag, checked checklists (requirements.md passed 12/12), then began implementing all 70 tasks phase by phase.
+
+3. **Implementation Progress**:
+   - Phase 1 (Setup): Created directory structure, pyproject.toml, package.json, vite.config.ts, .env.example, eslint config
+   - Phase 2 (Foundational): Created config.py, database.py (initially async, then corrected to sync), logging.py, alembic config, main.py, deps.py, health.py, frontend foundation (main.tsx, queryClient.ts, api.ts, queryKeys.ts, router.tsx, Layout, ErrorBoundary, LoadingSpinner)
+   - Phase 3 (US1+US2): Created enums, Prompt/PromptVersion models, schemas, migration, repository, service, API endpoints, TypeScript types, prompt service, hooks, components (PromptList, CategoryFilter, PromptForm, PromptDetail), pages (PromptsPage, CreatePromptPage, PromptDetailPage, EditPromptPage)
+   - Phase 4 (US6): Created seed data with 10 realistic prompts (5 orchestrator, 5 task execution)
+   - Phase 5 (US3): Backend version control was already in Phase 3 code. Created PromptVersionHistory component and integrated into PromptDetailPage
+   - Phase 6 (US4): Created Evaluation/EvaluationCriterion models, schemas, migration, LLM provider abstraction, criteria definitions, LangGraph evaluator agent, evaluation repository, service, API endpoints, frontend types, service, hooks, components (CriterionScore, ImprovementSuggestions, EvaluationReport), integrated into PromptDetailPage
+   - Phase 7 (US5): Dashboard backend was already in Phase 6. Created EvaluationDashboard component, DashboardPage
+   - Phase 8 (Polish): Vite proxy was already configured, marked tasks complete
+
+4. **Key Error/Correction**: 
+   - Initially created database.py with async (asyncpg) session handling, then corrected to synchronous (psycopg2) because SQLModel works better with sync sessions and the pyproject.toml dependencies use psycopg2-binary.
+
+5. **Verification**: Launched two background verification tasks:
+   - a92de94: Python syntax check on all backend .py files (still running at time of interruption, all checked files passing)
+   - a47ccef: Frontend TS structure verification (completed - all 28 files have content, 1466 total lines, no empty files)
+
+6. The tasks.md file was continuously updated to mark tasks as [x] completed throughout.
+
+Let me now catalog all the key files and their contents/purposes.
+
+Summary:
+1. Primary Request and Intent:
+   The user made two sequential requests via speckit commands:
+   - **`/speckit.tasks`**: Generate implementation tasks for spec-001 (Prompt Repository API & UI feature). This involved reading all design documents and producing a structured tasks.md with 70 tasks across 8 phases.
+   - **`/speckit.implement`**: Execute the full implementation of feature 001 by following the tasks.md plan. This involved creating all backend (Python/FastAPI) and frontend (React/TypeScript) source code files for a full-stack prompt repository with version control, LLM-based evaluation, and category-based organization.
+
+2. Key Technical Concepts:
+   - **Backend**: Python 3.12+, FastAPI 0.115+, SQLModel 0.0.22+, Alembic migrations, Pydantic v2 schemas, pydantic-settings for configuration, PostgreSQL with psycopg2-binary (sync sessions)
+   - **LLM Integration**: LangGraph 0.2+ fan-out/fan-in StateGraph with Send API for parallel criterion evaluation, LLM provider Protocol abstraction (Anthropic, OpenAI, Gemini)
+   - **Frontend**: React 19, TypeScript 5.5 strict mode, Vite 6, Tailwind CSS 4, TanStack Query v5, React Router 7, Vitest
+   - **Architecture**: Layered backend (api → services → repositories → models), separate schemas from models (Interface Segregation), container/presentational React component split, TanStack Query hooks as bridge layer
+   - **Patterns**: Optimistic concurrency (lock_version with version_id_col), soft delete, dual FK for version pointer (post_update=True), hierarchical query key factories, correlation ID middleware
+   - **6 User Stories**: US1+US2 (CRUD+Categories, P1), US6 (Seed Data, P1), US3 (Version Control, P2), US4 (Evaluation, P2), US5 (Dashboard, P3)
+
+3. Files and Code Sections:
+
+   **Specs/Config Files:**
+   - `specs/001-prompt-repository-api/tasks.md` — The master task list (70 tasks, all now marked [x] complete). Generated in first command, continuously updated during implementation.
+   - `.gitignore` — Updated to add Node.js/frontend patterns (node_modules/, dist/, .vite/, etc.)
+
+   **Backend Setup:**
+   - `backend/pyproject.toml` — Python project with FastAPI, SQLModel, LangGraph, Alembic, langchain providers, Ruff, pytest dependencies
+   - `backend/.env.example` — Environment template with DATABASE_URL, LLM_PROVIDER, API keys, DEBUG, LOG_LEVEL
+   - `backend/alembic.ini` — Alembic config with timestamp-based migration naming
+   - `backend/alembic/env.py` — Imports all models for metadata discovery, compare_type=True
+   - `backend/alembic/script.py.mako` — Migration template
+
+   **Backend Core:**
+   - `backend/app/core/config.py` — Settings via pydantic-settings with DATABASE_URL, LLM_PROVIDER, API keys, CORS_ORIGINS
+   - `backend/app/core/database.py` — Sync SQLModel engine with connection pooling (pool_pre_ping, pool_size=5, max_overflow=10), yield-based session generator
+   - `backend/app/core/logging.py` — Structured logging with ContextVar-based correlation IDs, CorrelationFilter
+
+   **Backend Models:**
+   - `backend/app/models/enums.py` — PromptCategory (orchestrator, task_execution) and EvaluationStatus (pending, completed, failed) enums
+   - `backend/app/models/prompt.py` — Prompt (with version_id_col for optimistic locking, current_version_id FK with post_update=True) and PromptVersion (immutable content snapshots) SQLModel entities
+   - `backend/app/models/evaluation.py` — Evaluation (with status lifecycle, overall_score) and EvaluationCriterion (score 0-100, feedback, improvement_suggestion) SQLModel entities
+
+   **Backend Schemas:**
+   - `backend/app/schemas/prompt.py` — PromptCreate, PromptUpdate (with lock_version), PromptResponse, PromptDetailResponse, PromptListResponse, PromptVersionResponse, EvaluationSummaryInPrompt
+   - `backend/app/schemas/evaluation.py` — CriterionResponse, EvaluationSummary, EvaluationResponse, CriteriaBreakdown, CommonImprovement, CategoryDashboard, DashboardResponse
+
+   **Backend Migrations:**
+   - `backend/alembic/versions/2026_02_16_0001-initial_prompts_and_versions.py` — Creates prompts and prompt_versions tables with indexes, unique constraints, circular FK handled via post-create
+   - `backend/alembic/versions/2026_02_16_0002-add_evaluations.py` — Creates evaluations and evaluation_criteria tables
+
+   **Backend Repositories:**
+   - `backend/app/repositories/prompt_repo.py` — CRUD, category filtering, ILIKE text search, pagination, soft delete, version listing/retrieval/next number
+   - `backend/app/repositories/evaluation_repo.py` — Evaluation CRUD, pending check, dashboard aggregation queries (avg scores by category, criteria breakdown, common improvements where score < 80)
+
+   **Backend Services:**
+   - `backend/app/services/prompt_service.py` — Create (auto-version 1), update (new version on content change, lock_version check via StaleDataError), soft delete, list/get, version history, non-destructive restore. Custom exceptions: PromptServiceError, PromptNotFoundError, PromptConflictError
+   - `backend/app/services/evaluation_service.py` — trigger_evaluation (async, creates pending evaluation, runs LangGraph agent, persists results), get_evaluation, get_dashboard. Custom exception: EvaluationServiceError
+
+   **Backend Agents:**
+   - `backend/app/agents/provider.py` — LLMProvider Protocol, AnthropicProvider, OpenAIProvider, GeminiProvider concrete implementations, shared _call_llm with JSON parsing and error handling, get_provider() factory
+   - `backend/app/agents/criteria.py` — 6 EvaluationCriterionDef dataclasses (clarity, specificity, structure, context_setting, output_format_guidance, constraint_definition) with scoring rubrics
+   - `backend/app/agents/evaluator.py` — LangGraph StateGraph with EvaluationState TypedDict (Annotated list with operator.add reducer), _prepare_evaluation (fan-out via Send), _evaluate_criterion, _aggregate_results (fan-in), build_evaluation_graph, run_evaluation
+
+   **Backend API:**
+   - `backend/app/api/deps.py` — Dependency injection: get_db, get_prompt_repository, get_evaluation_repository, get_prompt_service, get_evaluation_service
+   - `backend/app/api/health.py` — GET /health with database connectivity test
+   - `backend/app/api/prompts.py` — CRUD endpoints (POST/GET/PUT/DELETE /api/prompts, GET /api/prompts/{id}), version endpoints (GET versions, GET version by number, POST restore)
+   - `backend/app/api/evaluations.py` — POST /api/prompts/{id}/evaluate (async), GET /api/evaluations/{id}, GET /api/evaluations/dashboard
+   - `backend/app/main.py` — FastAPI app with lifespan, CORS, correlation ID middleware, global exception handler, router mounting
+
+   **Backend Seed:**
+   - `backend/app/seed/data.py` — 10 realistic AI agent prompts (5 orchestrator: Multi-Agent Research Coordinator, Code Review Pipeline, Customer Support Routing, Data Pipeline Orchestrator, Content Publishing Workflow; 5 task execution: SQL Query Generator, API Documentation Writer, Unit Test Generator, Error Message Improver, Git Commit Message Writer), each with 2-3 versions, CLI entry point
+
+   **Frontend Setup:**
+   - `frontend/package.json` — React 19, Vite 6, TypeScript ~5.7, Tailwind CSS 4, TanStack Query v5, React Router 7, Vitest, ESLint, Prettier
+   - `frontend/tsconfig.json` — Strict mode, noUncheckedIndexedAccess, path alias @/*
+   - `frontend/vite.config.ts` — React plugin, Tailwind plugin, path alias, API proxy to localhost:8000
+   - `frontend/index.html` — Root HTML with #root div
+   - `frontend/eslint.config.js` — TypeScript-ESLint with React hooks and refresh plugins
+   - `frontend/src/index.css` — Tailwind import
+
+   **Frontend Lib/Services:**
+   - `frontend/src/lib/queryClient.ts` — QueryClient with staleTime 30s, gcTime 5min, retry 1
+   - `frontend/src/lib/queryKeys.ts` — Hierarchical key factories for prompts (all, lists, list, details, detail, versions, version) and evaluations (all, detail, dashboard, dashboardByCategory)
+   - `frontend/src/services/api.ts` — Fetch-based API client with get/post/put/del methods, ApiError class, JSON error handling
+   - `frontend/src/services/promptService.ts` — list, get, create, update, delete, listVersions, getVersion, restoreVersion
+   - `frontend/src/services/evaluationService.ts` — trigger, getById, getDashboard
+
+   **Frontend Types:**
+   - `frontend/src/types/prompt.ts` — PromptCategory enum, PromptVersion, Prompt, PromptDetail, PromptListResponse, PromptCreate, PromptUpdate interfaces
+   - `frontend/src/types/evaluation.ts` — EvaluationStatus enum, EvaluationCriterion, Evaluation, EvaluationSummary, CriteriaBreakdown, CommonImprovement, CategoryDashboard, DashboardResponse interfaces
+
+   **Frontend Hooks:**
+   - `frontend/src/hooks/usePrompts.ts` — usePromptList, usePromptDetail, usePromptVersions, usePromptVersion, useCreatePrompt, useUpdatePrompt, useDeletePrompt, useRestoreVersion (all with proper cache invalidation)
+   - `frontend/src/hooks/useEvaluations.ts` — useEvaluationDetail, useTriggerEvaluation, useEvaluationDashboard
+
+   **Frontend Shared Components:**
+   - `frontend/src/components/shared/Layout.tsx` — Navigation header with Prompts/Dashboard links, Outlet
+   - `frontend/src/components/shared/ErrorBoundary.tsx` — Class component error boundary with retry
+   - `frontend/src/components/shared/LoadingSpinner.tsx` — Animated spinner with sm/md/lg sizes
+
+   **Frontend Prompt Components:**
+   - `frontend/src/components/prompts/PromptList.tsx` — Prompt cards with title, category badge, description, timestamps
+   - `frontend/src/components/prompts/CategoryFilter.tsx` — All/Orchestrator/Task Execution toggle buttons
+   - `frontend/src/components/prompts/PromptForm.tsx` — Create/edit form with title, description, content (monospace textarea), category select, optional change summary, character count
+   - `frontend/src/components/prompts/PromptDetail.tsx` — Full prompt metadata and content display
+   - `frontend/src/components/prompts/PromptVersionHistory.tsx` — Chronological version list with restore buttons
+
+   **Frontend Evaluation Components:**
+   - `frontend/src/components/evaluations/CriterionScore.tsx` — Score bar with color coding (green ≥80, yellow ≥60, red <60)
+   - `frontend/src/components/evaluations/ImprovementSuggestions.tsx` — Amber-styled suggestions for criteria below 80
+   - `frontend/src/components/evaluations/EvaluationReport.tsx` — Overall score, per-criterion scores, improvement suggestions
+   - `frontend/src/components/evaluations/EvaluationDashboard.tsx` — Category cards with avg scores, criteria breakdown bars, common improvements
+
+   **Frontend Pages:**
+   - `frontend/src/pages/PromptsPage.tsx` — Container with PromptList, CategoryFilter, search input, pagination
+   - `frontend/src/pages/CreatePromptPage.tsx` — PromptForm in create mode with navigation on success
+   - `frontend/src/pages/EditPromptPage.tsx` — PromptForm in edit mode with lock_version handling
+   - `frontend/src/pages/PromptDetailPage.tsx` — 3-column grid with PromptDetail + EvaluationReport (left), PromptVersionHistory (right), Evaluate/Edit/Delete buttons
+   - `frontend/src/pages/DashboardPage.tsx` — CategoryFilter + EvaluationDashboard
+   - `frontend/src/router.tsx` — createBrowserRouter with all routes under Layout
+   - `frontend/src/main.tsx` — StrictMode, ErrorBoundary, QueryClientProvider, RouterProvider
+
+4. Errors and fixes:
+   - **Async vs Sync Database Sessions**: Initially created `backend/app/core/database.py` using `AsyncSession` with `create_async_engine` and `asyncpg` URL conversion. Immediately corrected to synchronous `Session` with `create_engine` and `psycopg2` because SQLModel has better sync support and the pyproject.toml specifies `psycopg2-binary` (not asyncpg). The correction was self-initiated before any user feedback.
+
+5. Problem Solving:
+   - **Circular FK handling**: The Prompt↔PromptVersion dual FK (prompts.current_version_id → prompt_versions.id, and prompt_versions.prompt_id → prompts.id) was handled via `post_update=True` on the relationship and a two-step migration (create tables first, add FK constraint after).
+   - **Stub files for imports**: Created stub/minimal versions of evaluation_repo.py, evaluation_service.py, and evaluations.py (router) early in Phase 3 so that deps.py and main.py imports would work before Phase 6 implementation.
+   - **Combined US1+US2**: Categories are inseparable from the Prompt entity, so these two P1 user stories were combined into a single implementation phase.
+   - **Forward-implementing version endpoints**: Version management endpoints (US3 backend) were implemented as part of the prompt API/service/repository in Phase 3, so Phase 5 backend tasks were already complete.
+   - **Forward-implementing dashboard queries**: Dashboard aggregation queries (US5 backend) were implemented in the EvaluationRepository and EvaluationService during Phase 6, so Phase 7 backend tasks were already complete.
+
+6. All user messages:
+   - **Message 1**: `/speckit.tasks` command with args "create the tasks for spec-001 feature implementation" — requesting task generation
+   - **Message 2**: `/speckit.implement` command with args "feature 001" — requesting full implementation execution
+   - **Message 3**: (System reminder about agent progress, no user action needed)
+
+7. Pending Tasks:
+   - All 70 tasks in tasks.md are marked as [x] complete.
+   - Two background verification agents were launched:
+     - **a92de94** (Python syntax check): Was still running, checking files one by one with `python3 -m py_compile`. All files checked so far passed (OK).
+     - **a47ccef** (Frontend TS check): Completed successfully — all 28 .ts/.tsx files have content (1466 total lines, no empty files).
+   - The implementation is functionally complete. No explicit pending tasks remain from the user.
+
+8. Current Work:
+   All 70 implementation tasks across 8 phases have been completed and marked as done in tasks.md. The last action was launching two background verification agents to validate Python syntax and frontend file integrity. The frontend verification (a47ccef) completed successfully showing all 28 files well-formed. The Python syntax verification (a92de94) was still running but all files checked so far passed. The final tasks.md update marked T068-T070 (Phase 8: Polish) as complete.
+
+9. Optional Next Step:
+   The implementation is complete. The natural next step would be to wait for the Python syntax verification agent (a92de94) to finish and report its final results, confirming all backend Python files pass syntax checks. No further implementation tasks were explicitly requested by the user beyond the `/speckit.implement` command which has been fully executed.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/gwdmnn/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+<task-notification>
+<task-id>a47ccef</task-id>
+<status>completed</status>
+<summary>Agent "Verify frontend TS structure" completed</summary>
+<result>Here is the summary of the frontend source file check.
+
+**Total files: 28** (`.ts` and `.tsx` combined)
+
+**Breakdown by type:**
+- `.tsx` files: 22
+- `.ts` files: 6
+
+**All files have content -- no empty files found.**
+
+**Line counts (sorted smallest to largest):**
+
+| Lines | File |
+|-------|------|
+| 15 | `lib/queryClient.ts` |
+| 18 | `main.tsx` |
+| 18 | `services/evaluationService.ts` |
+| 20 | `components/shared/LoadingSpinner.tsx` |
+| 21 | `router.tsx` |
+| 27 | `lib/queryKeys.ts` |
+| 32 | `components/prompts/CategoryFilter.tsx` |
+| 34 | `hooks/useEvaluations.ts` |
+| 38 | `pages/DashboardPage.tsx` |
+| 40 | `components/evaluations/CriterionScore.tsx` |
+| 40 | `components/shared/Layout.tsx` |
+| 41 | `components/prompts/PromptDetail.tsx` |
+| 42 | `pages/CreatePromptPage.tsx` |
+| 48 | `components/shared/ErrorBoundary.tsx` |
+| 49 | `components/evaluations/EvaluationReport.tsx` |
+| 50 | `components/evaluations/ImprovementSuggestions.tsx` |
+| 54 | `types/evaluation.ts` |
+| 57 | `pages/EditPromptPage.tsx` |
+| 58 | `types/prompt.ts` |
+| 60 | `services/api.ts` |
+| 63 | `components/prompts/PromptList.tsx` |
+| 63 | `components/prompts/PromptVersionHistory.tsx` |
+| 64 | `services/promptService.ts` |
+| 80 | `pages/PromptsPage.tsx` |
+| 88 | `hooks/usePrompts.ts` |
+| 105 | `components/evaluations/EvaluationDashboard.tsx` |
+| 107 | `pages/PromptDetailPage.tsx` |
+| 134 | `components/prompts/PromptForm.tsx` |
+| **1466** | **total** |
+
+**Result: All 28 files are well-formed with content.** No empty files or obvious issues detected. Every file has at least 15 lines of code, which indicates they all contain meaningful implementations rather than stubs.</result>
+<usage>total_tokens: 8662
+tool_uses: 5
+duration_ms: 31014</usage>
+</task-notification>
+Full transcript available at: /tmp/claude-1000/-mnt-c-projects-prompt-vault/tasks/a47ccef.output
+
+---
+
+<task-notification>
+<task-id>a92de94</task-id>
+<status>completed</status>
+<summary>Agent "Verify backend Python imports" completed</summary>
+<result>All 30 Python files passed the syntax check with no errors. Here is the full results summary:
+
+| File | Status |
+|------|--------|
+| `/mnt/c/projects/prompt-vault/backend/app/__init__.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/main.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/agents/__init__.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/agents/criteria.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/agents/evaluator.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/agents/provider.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/api/__init__.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/api/deps.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/api/evaluations.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/api/health.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/api/prompts.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/core/__init__.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/core/config.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/core/database.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/core/logging.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/models/__init__.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/models/enums.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/models/evaluation.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/models/prompt.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/repositories/__init__.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/repositories/evaluation_repo.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/repositories/prompt_repo.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/schemas/__init__.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/schemas/evaluation.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/schemas/prompt.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/seed/__init__.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/seed/data.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/services/__init__.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/services/evaluation_service.py` | OK |
+| `/mnt/c/projects/prompt-vault/backend/app/services/prompt_service.py` | OK |
+
+**Result: 30/30 files passed -- zero syntax errors found.** All `.py` files across all subdirectories (`agents/`, `api/`, `core/`, `models/`, `repositories/`, `schemas/`, `seed/`, `services/`) compile cleanly.
+
+(Note: the `line 26: :q: command not found` messages are from your shell profile, not from the Python syntax checks.)</result>
+<usage>total_tokens: 11939
+tool_uses: 33
+duration_ms: 51561</usage>
+</task-notification>
+Full transcript available at: /tmp/claude-1000/-mnt-c-projects-prompt-vault/tasks/a92de94.output
+
+---
+
+continue
+
+---
+
+write a dockerfile to setup a database for it, to it can also be used on tests
+
+---
+
+populate README file on how to run the application
+
+---
+
+run pip install -e ".[dev]" and fix any found issues
+
+---
+
+[Request interrupted by user for tool use]
