@@ -17,17 +17,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Create enum types
-    promptcategory = sa.Enum("orchestrator", "task_execution", name="promptcategory")
-    promptcategory.create(op.get_bind(), checkfirst=True)
-
     # Create prompts table (without current_version_id FK first)
     op.create_table(
         "prompts",
         sa.Column("id", sa.Uuid(), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("title", sa.String(200), nullable=False),
         sa.Column("description", sa.String(2000), nullable=False, server_default=""),
-        sa.Column("category", promptcategory, nullable=False),
+        sa.Column("category", sa.String(50), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("lock_version", sa.Integer(), nullable=False, server_default=sa.text("1")),
         sa.Column(
@@ -87,4 +83,3 @@ def downgrade() -> None:
     op.drop_index("ix_prompts_category", table_name="prompts")
     op.drop_index("ix_prompts_title", table_name="prompts")
     op.drop_table("prompts")
-    sa.Enum(name="promptcategory").drop(op.get_bind(), checkfirst=True)

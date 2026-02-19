@@ -17,15 +17,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    evaluationstatus = sa.Enum("pending", "completed", "failed", name="evaluationstatus")
-    evaluationstatus.create(op.get_bind(), checkfirst=True)
-
     op.create_table(
         "evaluations",
         sa.Column("id", sa.Uuid(), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("prompt_version_id", sa.Uuid(), nullable=False),
         sa.Column("overall_score", sa.Float(), nullable=True),
-        sa.Column("status", evaluationstatus, nullable=False, server_default="pending"),
+        sa.Column("status", sa.String(20), nullable=False, server_default="pending"),
         sa.Column("error_message", sa.String(), nullable=True),
         sa.Column(
             "created_at",
@@ -63,4 +60,3 @@ def downgrade() -> None:
     op.drop_index("ix_evaluations_status", table_name="evaluations")
     op.drop_index("ix_evaluations_prompt_version_id", table_name="evaluations")
     op.drop_table("evaluations")
-    sa.Enum(name="evaluationstatus").drop(op.get_bind(), checkfirst=True)
